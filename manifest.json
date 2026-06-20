@@ -1,9 +1,11 @@
 {
   "name": "Ghost Mesh",
   "short_name": "GhostMesh",
-  "start_url": "./index.html",
-  "scope": "./",
+  "id": "/",
+  "start_url": "./",
+  "scope": "./", 
   "display": "standalone",
+  "display_override": ["standalone"],
   "background_color": "#0d0b14",
   "theme_color": "#9b59f7",
   "orientation": "portrait",
@@ -15,7 +17,7 @@
       "purpose": "any maskable"
     },
     {
-      "src": "icon-512.png",
+      "src": "icon-512.png", 
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
