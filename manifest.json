@@ -1,7 +1,7 @@
 {
   "name": "Ghost Mesh",
   "short_name": "GhostMesh",
-  "id": "/",
+  "id": "/Ghosts_mesh-2/",
   "start_url": "./",
   "scope": "./", 
   "display": "standalone",
