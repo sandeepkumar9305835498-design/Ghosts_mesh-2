@@ -181,7 +181,21 @@ function closeProfile() { showScreen("chatlist-screen"); }
 function openSOS() { closeAllMenus(); showScreen("sos-screen"); initSOSMap(); fetchSOSInfo(); }
 function closeSOS() { showScreen("chatlist-screen"); }
 function openThemePicker() { closeAllMenus(); buildThemeGrid(); showScreen("theme-screen"); }
-function openOnlineUsers() { closeAllMenus(); showScreen("online-screen"); renderOnlineUsers(); }
+function openOnlineUsers() {
+    closeAllMenus();
+    showScreen("online-screen");
+    // Add ourselves to the list so we're always visible
+    if (!isGhostMode) {
+        onlineUsers[userGhostID] = { displayName: userDisplayName + " (You)", online: true };
+    }
+    // Refresh: make sure all open connections are in onlineUsers
+    activeConnections.forEach(c => {
+        if (c.open && !onlineUsers[c.peer]) {
+            onlineUsers[c.peer] = { displayName: chatData[c.peer]?.displayName || c.peer, online: true };
+        }
+    });
+    renderOnlineUsers();
+}
 
 function goBackToList() {
     currentChatPeer = null;
@@ -494,6 +508,10 @@ function setupConn(conn) {
         conn.send({ type: "dp-update", sender: userGhostID, dpData: userCurrentDP, displayName: userDisplayName });
         conn.send({ type: "presence", sender: userGhostID, displayName: userDisplayName, online: true });
         if (!chatData[conn.peer]) initChatData(conn.peer);
+        // Immediately show peer as online when connection opens (before handshake)
+        updateOnlineUsers(conn.peer, chatData[conn.peer]?.displayName || conn.peer, true);
+        if (!activeConnections.some(c => c.peer === conn.peer)) activeConnections.push(conn);
+        renderChatList();
     });
 
     conn.on('data', data => {
@@ -588,7 +606,11 @@ function setupConn(conn) {
                 break;
 
             case "presence":
-                if (!isGhostMode) updateOnlineUsers(data.sender, data.displayName || data.sender, data.online);
+                // Always track peer who sent presence; add to activeConnections if not already there
+                updateOnlineUsers(data.sender, data.displayName || data.sender, data.online !== false);
+                if (conn.open && !activeConnections.some(c => c.peer === conn.peer)) {
+                    activeConnections.push(conn);
+                }
                 break;
 
             case "status-update":
