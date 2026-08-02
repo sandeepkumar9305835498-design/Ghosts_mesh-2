@@ -14,6 +14,8 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.js"></script>
     <link rel="stylesheet" href="style.css">
 </head>
 <body onload="initApp()">
@@ -100,6 +102,9 @@
                 <button class="icon-btn" onclick="openNewConnect()" title="New Chat">
                     <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
                 </button>
+                <button class="icon-btn" onclick="openOfflineConnect()" title="Connect via WiFi (No Internet)">
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 21.5l1.5-1.5c-.83-.83-2.17-.83-3 0L12 21.5zM12 3C7.46 3 3.34 4.78.29 7.69c-.19.18-.19.49.01.68l1.85 1.85c.18.18.47.19.66.02C5.31 7.7 8.5 6.4 12 6.4s6.69 1.3 9.19 3.84c.19.17.48.16.66-.02l1.85-1.85c.2-.19.2-.5.01-.68C20.66 4.78 16.54 3 12 3zm0 6.4c-2.65 0-5.05.99-6.9 2.61-.2.18-.2.5-.01.69l1.86 1.86c.17.17.44.19.63.04C8.85 13.35 10.35 12.8 12 12.8s3.15.55 4.42 1.8c.19.15.46.13.63-.04l1.86-1.86c.19-.19.19-.51-.01-.69A10.34 10.34 0 0 0 12 9.4z"/></svg>
+                </button>
                 <div class="three-dot-wrap">
                     <button class="icon-btn" onclick="toggleMainMenu()">
                         <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
@@ -116,6 +121,10 @@
                         <div class="menu-item" onclick="openOnlineUsers()">
                             <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
                             Online Users
+                        </div>
+                        <div class="menu-item" onclick="openOfflineConnect()">
+                            <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 21.5l1.5-1.5c-.83-.83-2.17-.83-3 0L12 21.5zM12 3C7.46 3 3.34 4.78.29 7.69c-.19.18-.19.49.01.68l1.85 1.85c.18.18.47.19.66.02C5.31 7.7 8.5 6.4 12 6.4s6.69 1.3 9.19 3.84c.19.17.48.16.66-.02l1.85-1.85c.2-.19.2-.5.01-.68C20.66 4.78 16.54 3 12 3zm0 6.4c-2.65 0-5.05.99-6.9 2.61-.2.18-.2.5-.01.69l1.86 1.86c.17.17.44.19.63.04C8.85 13.35 10.35 12.8 12 12.8s3.15.55 4.42 1.8c.19.15.46.13.63-.04l1.86-1.86c.19-.19.19-.51-.01-.69A10.34 10.34 0 0 0 12 9.4z"/></svg>
+                            Connect via WiFi
                         </div>
                         <div class="menu-item" onclick="openThemePicker()">
                             <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8z"/></svg>
@@ -365,6 +374,60 @@
         </header>
         <div style="padding:20px;overflow-y:auto;flex:1;">
             <div class="theme-grid" id="theme-grid"></div>
+        </div>
+    </div>
+
+    <!-- OFFLINE WIFI CONNECT -->
+    <div id="offline-screen" class="app-screen hidden">
+        <header class="app-header">
+            <button class="back-btn" onclick="closeOfflineConnect()">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+            </button>
+            <h3 class="header-title">Connect via WiFi</h3>
+        </header>
+        <div style="padding:16px;overflow-y:auto;flex:1;">
+            <p class="sub" style="text-align:center;margin-bottom:14px;">Works on the same WiFi/hotspot — no internet required. One device creates, the other joins.</p>
+
+            <div class="offline-tabs">
+                <button id="offline-tab-create" class="offline-tab-btn active" onclick="switchOfflineTab('create')">Create Chat</button>
+                <button id="offline-tab-join" class="offline-tab-btn" onclick="switchOfflineTab('join')">Join Chat</button>
+            </div>
+
+            <!-- CREATE FLOW -->
+            <div id="offline-create-panel" class="offline-panel">
+                <div id="offline-create-step1">
+                    <button class="primary-btn" onclick="startOfflineHost()">Generate My QR</button>
+                </div>
+                <div id="offline-create-step2" class="hidden" style="text-align:center;">
+                    <p class="sub">Show this to your friend, let them scan it</p>
+                    <div id="offline-qr-host" class="offline-qr-box"></div>
+                    <button class="primary-btn" style="margin-top:14px;" onclick="switchToScanAnswer()">Next: Scan Their Reply QR</button>
+                </div>
+                <div id="offline-create-step3" class="hidden">
+                    <p class="sub" style="text-align:center;">Point camera at their reply QR</p>
+                    <video id="offline-video-host" playsinline autoplay class="offline-video"></video>
+                    <canvas id="offline-canvas-host" class="hidden"></canvas>
+                </div>
+                <div id="offline-create-step4" class="hidden" style="text-align:center;">
+                    <p class="sub">Connecting...</p>
+                </div>
+            </div>
+
+            <!-- JOIN FLOW -->
+            <div id="offline-join-panel" class="offline-panel hidden">
+                <div id="offline-join-step1">
+                    <button class="primary-btn" onclick="startOfflineJoinScan()">Scan Their QR</button>
+                    <video id="offline-video-join" playsinline autoplay class="offline-video hidden"></video>
+                    <canvas id="offline-canvas-join" class="hidden"></canvas>
+                </div>
+                <div id="offline-join-step2" class="hidden" style="text-align:center;">
+                    <p class="sub">Show this reply QR to them so they can scan it</p>
+                    <div id="offline-qr-join" class="offline-qr-box"></div>
+                    <p class="sub" id="offline-join-status">Waiting for connection...</p>
+                </div>
+            </div>
+
+            <p id="offline-status-msg" class="sub" style="text-align:center;margin-top:14px;color:var(--accent);"></p>
         </div>
     </div>
 
