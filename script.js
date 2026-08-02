@@ -730,6 +730,255 @@ function rejectConnectionRequest() {
     setTimeout(() => { if(pendingIncomingConnection) pendingIncomingConnection.close(); pendingIncomingConnection = null; }, 500);
 }
 
+// ===== OFFLINE WIFI CONNECT (Serverless WebRTC, no internet needed) =====
+// Two devices exchange a WebRTC offer/answer via QR codes and connect
+// directly over the local network (same WiFi/hotspot). No signaling
+// server, no PeerJS cloud, no internet required once both devices are
+// on the same network.
+
+let offlinePC = null;
+let offlineDC = null;
+let offlineCameraStream = null;
+let offlineScanLoopId = null;
+
+function openOfflineConnect() {
+    closeAllMenus();
+    showScreen("offline-screen");
+    resetOfflinePanels();
+}
+
+function closeOfflineConnect() {
+    stopOfflineCamera();
+    if (offlinePC && (!offlineDC || offlineDC.readyState !== "open")) {
+        try { offlinePC.close(); } catch(e){}
+        offlinePC = null; offlineDC = null;
+    }
+    showScreen("chatlist-screen");
+}
+
+function resetOfflinePanels() {
+    switchOfflineTab("create");
+    document.getElementById("offline-create-step1").classList.remove("hidden");
+    document.getElementById("offline-create-step2").classList.add("hidden");
+    document.getElementById("offline-create-step3").classList.add("hidden");
+    document.getElementById("offline-create-step4").classList.add("hidden");
+    document.getElementById("offline-join-step1").classList.remove("hidden");
+    document.getElementById("offline-join-step2").classList.add("hidden");
+    document.getElementById("offline-video-join").classList.add("hidden");
+    document.getElementById("offline-status-msg").innerText = "";
+    document.getElementById("offline-qr-host").innerHTML = "";
+    document.getElementById("offline-qr-join").innerHTML = "";
+}
+
+function switchOfflineTab(tab) {
+    document.getElementById("offline-tab-create").classList.toggle("active", tab === "create");
+    document.getElementById("offline-tab-join").classList.toggle("active", tab === "join");
+    document.getElementById("offline-create-panel").classList.toggle("hidden", tab !== "create");
+    document.getElementById("offline-join-panel").classList.toggle("hidden", tab !== "join");
+}
+
+function offlineIceConfig() {
+    // No STUN/TURN — we only want local network (host) candidates since
+    // this feature is specifically for "no internet" same-WiFi use.
+    return { iceServers: [] };
+}
+
+// Wait for ICE gathering to finish so the SDP we encode into the QR
+// already contains all local candidates (no separate trickle needed).
+function waitForIceGatheringComplete(pc) {
+    return new Promise(resolve => {
+        if (pc.iceGatheringState === "complete") { resolve(); return; }
+        function check() {
+            if (pc.iceGatheringState === "complete") {
+                pc.removeEventListener("icegatheringstatechange", check);
+                resolve();
+            }
+        }
+        pc.addEventListener("icegatheringstatechange", check);
+        // Safety timeout in case gathering stalls
+        setTimeout(resolve, 3000);
+    });
+}
+
+// Wraps a raw RTCDataChannel so it looks like a PeerJS DataConnection
+// (peer, open, on(), send()) — lets us reuse setupConn() unchanged.
+function wrapOfflineChannel(dc, peerId) {
+    const listeners = {};
+    const wrapped = {
+        peer: peerId,
+        open: false,
+        on(event, cb) { (listeners[event] = listeners[event] || []).push(cb); },
+        send(data) { if (dc.readyState === "open") dc.send(JSON.stringify(data)); },
+        close() { try { dc.close(); } catch(e){} }
+    };
+    dc.onopen = () => { wrapped.open = true; (listeners.open || []).forEach(f => f()); };
+    dc.onmessage = e => {
+        let data; try { data = JSON.parse(e.data); } catch(err) { return; }
+        (listeners.data || []).forEach(f => f(data));
+    };
+    dc.onclose = () => { wrapped.open = false; (listeners.close || []).forEach(f => f()); };
+    return wrapped;
+}
+
+function renderOfflineQR(elId, payloadObj) {
+    const container = document.getElementById(elId);
+    container.innerHTML = "";
+    new QRCode(container, {
+        text: JSON.stringify(payloadObj),
+        width: 220,
+        height: 220,
+        correctLevel: QRCode.CorrectLevel.L
+    });
+}
+
+// ----- HOST (creator) side -----
+async function startOfflineHost() {
+    try {
+        offlinePC = new RTCPeerConnection(offlineIceConfig());
+        offlineDC = offlinePC.createDataChannel("gm-offline");
+        setupOfflineDataChannel(offlineDC, null); // peerId filled in once we scan their answer
+
+        const offer = await offlinePC.createOffer();
+        await offlinePC.setLocalDescription(offer);
+        await waitForIceGatheringComplete(offlinePC);
+
+        const payload = { gid: userGhostID, name: userDisplayName, sdp: offlinePC.localDescription };
+        renderOfflineQR("offline-qr-host", payload);
+
+        document.getElementById("offline-create-step1").classList.add("hidden");
+        document.getElementById("offline-create-step2").classList.remove("hidden");
+    } catch(e) {
+        console.error(e);
+        showToast("Could not start offline connection");
+    }
+}
+
+function switchToScanAnswer() {
+    document.getElementById("offline-create-step2").classList.add("hidden");
+    document.getElementById("offline-create-step3").classList.remove("hidden");
+    startCameraScan("offline-video-host", "offline-canvas-host", async decoded => {
+        try {
+            const answer = JSON.parse(decoded);
+            if (!answer.sdp || !answer.gid) { showToast("Invalid QR — try again"); return false; }
+            stopOfflineCamera();
+            document.getElementById("offline-create-step3").classList.add("hidden");
+            document.getElementById("offline-create-step4").classList.remove("hidden");
+
+            if (offlineDC) offlineDC.__peerId = answer.gid;
+            await offlinePC.setRemoteDescription(new RTCSessionDescription(answer.sdp));
+            offlinePendingPeerInfo = { gid: answer.gid, name: answer.name };
+            return true;
+        } catch(e) {
+            console.error(e);
+            showToast("Could not read QR — try again");
+            return false;
+        }
+    });
+}
+
+let offlinePendingPeerInfo = null;
+
+function setupOfflineDataChannel(dc, knownPeerId) {
+    const wrapped = wrapOfflineChannel(dc, knownPeerId || "offline-pending");
+    dc.addEventListener("open", () => {
+        // Patch in the real peer id once we know it (host side learns it
+        // from the scanned answer; join side knows it from the start).
+        if (offlinePendingPeerInfo) {
+            wrapped.peer = offlinePendingPeerInfo.gid;
+        }
+        showToast("Offline connection established!");
+        closeOfflineConnect();
+        setupConn(wrapped);
+    });
+}
+
+// ----- JOIN (scanner) side -----
+function startOfflineJoinScan() {
+    document.getElementById("offline-join-step1").querySelector(".primary-btn")?.classList.add("hidden");
+    const video = document.getElementById("offline-video-join");
+    video.classList.remove("hidden");
+    startCameraScan("offline-video-join", "offline-canvas-join", async decoded => {
+        try {
+            const offer = JSON.parse(decoded);
+            if (!offer.sdp || !offer.gid) { showToast("Invalid QR — try again"); return false; }
+            stopOfflineCamera();
+
+            offlinePC = new RTCPeerConnection(offlineIceConfig());
+            offlinePC.addEventListener("datachannel", ev => {
+                offlineDC = ev.channel;
+                offlinePendingPeerInfo = { gid: offer.gid, name: offer.name };
+                setupOfflineDataChannel(offlineDC, offer.gid);
+            });
+
+            await offlinePC.setRemoteDescription(new RTCSessionDescription(offer.sdp));
+            const answer = await offlinePC.createAnswer();
+            await offlinePC.setLocalDescription(answer);
+            await waitForIceGatheringComplete(offlinePC);
+
+            const payload = { gid: userGhostID, name: userDisplayName, sdp: offlinePC.localDescription };
+            document.getElementById("offline-join-step1").classList.add("hidden");
+            document.getElementById("offline-join-step2").classList.remove("hidden");
+            renderOfflineQR("offline-qr-join", payload);
+            return true;
+        } catch(e) {
+            console.error(e);
+            showToast("Could not read QR — try again");
+            return false;
+        }
+    });
+}
+
+// ----- Shared camera scanning helper -----
+function startCameraScan(videoElId, canvasElId, onDecoded) {
+    stopOfflineCamera();
+    const video = document.getElementById(videoElId);
+    const canvas = document.getElementById(canvasElId);
+    const ctx = canvas.getContext("2d");
+
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+        .then(stream => {
+            offlineCameraStream = stream;
+            video.srcObject = stream;
+            video.setAttribute("playsinline", true);
+            video.play();
+
+            function tick() {
+                if (!offlineCameraStream) return;
+                if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const code = jsQR(imgData.data, imgData.width, imgData.height);
+                    if (code && code.data) {
+                        Promise.resolve(onDecoded(code.data)).then(ok => {
+                            if (!ok) offlineScanLoopId = requestAnimationFrame(tick);
+                        });
+                        return;
+                    }
+                }
+                offlineScanLoopId = requestAnimationFrame(tick);
+            }
+            tick();
+        })
+        .catch(err => {
+            console.error(err);
+            showToast("Camera access denied");
+        });
+}
+
+function stopOfflineCamera() {
+    if (offlineScanLoopId) { cancelAnimationFrame(offlineScanLoopId); offlineScanLoopId = null; }
+    if (offlineCameraStream) {
+        offlineCameraStream.getTracks().forEach(t => t.stop());
+        offlineCameraStream = null;
+    }
+    ["offline-video-host", "offline-video-join"].forEach(id => {
+        const v = document.getElementById(id);
+        if (v) { v.srcObject = null; v.classList.add("hidden"); }
+    });
+}
+
 // ===== CHAT LIST =====
 function renderChatList() {
     const container = document.getElementById("chat-list-container");
