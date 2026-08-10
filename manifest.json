@@ -1,0 +1,50 @@
+{
+  "name": "Ghost Mesh",
+  "short_name": "GhostMesh",
+  "description": "Secure P2P Messenger — No Server, No Trace",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0d0b14",
+  "theme_color": "#9b59f7",
+  "orientation": "portrait",
+  "lang": "en",
+  "categories": ["social", "communication"],
+  "permissions": [
+    "geolocation",
+    "camera",
+    "microphone",
+    "notifications",
+    "vibrate",
+    "accelerometer",
+    "storage"
+  ],
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "SOS Emergency",
+      "short_name": "SOS",
+      "url": "./index.html?screen=sos",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "New Chat",
+      "short_name": "Chat",
+      "url": "./index.html?screen=chat",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}
