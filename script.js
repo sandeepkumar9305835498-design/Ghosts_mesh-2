@@ -14,9 +14,9 @@ let mediaRecorderInstance = null, recordedAudioChunks = [], isRecordingAudio = f
 let selectedMsgIdForContext = null;
 let replyToMsgId = null, replyText = "";
 let localMediaStream = null, activeP2PCallInstance = null, pendingIncomingCallEvent = null;
-let radarMapInstance = null, sosMapInstance = null;
-let sosActive = false, sosInterval = null;
+let radarMapInstance = null;
 let userLat = 20.5937, userLng = 78.9629;
+let hasRealLocation = false; // true only once a real GPS fix is obtained — the values above are just a placeholder
 let pinBuffer = "";
 let liveLocationInterval = null;
 let callTimerInterval = null;
@@ -28,7 +28,6 @@ let currentTheme = "default";
 let fishAnimId = null;
 let fishes = [];
 let onlineUsers = {};
-let shakeLastTime = 0, shakeThreshold = 15;
 let safeZone = null;
 let chatMuted = {};
 
@@ -43,6 +42,27 @@ const safeStorage = {
     del(k){ if(this._ok){ try{ localStorage.removeItem(k); return; }catch(e){} } delete this._memory[k]; }
 };
 
+// ===== GLOBAL CRASH GUARD =====
+// A single unexpected error anywhere (a null element, a bad message,
+// a WebRTC hiccup) should never freeze or white-screen the whole app.
+// Log it for debugging and let the person keep using everything else.
+let lastCrashToastTime = 0;
+function safeToastOnce(msg) {
+    const now = Date.now();
+    if (now - lastCrashToastTime < 4000) return; // avoid spamming toasts if errors repeat rapidly
+    lastCrashToastTime = now;
+    try { showToast(msg); } catch(e) { /* even the toast failed — nothing more we can safely do */ }
+}
+window.addEventListener("error", event => {
+    console.error("Uncaught error:", event.error || event.message);
+    safeToastOnce("Something went wrong — the app is still running, please try again");
+});
+window.addEventListener("unhandledrejection", event => {
+    console.error("Unhandled promise rejection:", event.reason);
+    safeToastOnce("Something went wrong — the app is still running, please try again");
+    event.preventDefault();
+});
+
 // ===== INIT =====
 function initApp() {
     const pin = safeStorage.get("gm_pin");
@@ -53,7 +73,6 @@ function initApp() {
         else showEl("login-screen");
     }
     loadTheme();
-    initShakeDetect();
     requestPermissions();
 }
 
@@ -64,7 +83,7 @@ function requestPermissions() {
 // ===== PERMISSIONS =====
 // Permissions are declared in manifest.json and requested on demand
 // Camera/Mic: requested on call initiation
-// Location: requested on map/SOS open
+// Location: requested on map open
 // Notifications: requested below
 function requestNotificationPermission() {
     if ("Notification" in window && Notification.permission === "default") {
@@ -122,6 +141,7 @@ function executeLogin(phone, name) {
     hideEl("login-screen"); hideEl("lock-screen");
     showEl("app-shell");
     showScreen("chatlist-screen");
+    initMainTabsScroller();
 
     updateHeaderDisplay();
     updateProfileScreen();
@@ -172,26 +192,59 @@ function showScreen(id) {
     document.querySelectorAll(".app-screen").forEach(s => s.classList.add("hidden"));
     const t = document.getElementById(id);
     if (t) t.classList.remove("hidden");
+    if (id === "chatlist-screen") scrollToMainTab(0);
 }
 function showEl(id) { const e = document.getElementById(id); if(e) e.classList.remove("hidden"); }
 function hideEl(id) { const e = document.getElementById(id); if(e) e.classList.add("hidden"); }
 
+// ===== WHATSAPP-STYLE MAIN TABS (Chats / WiFi / Online) =====
+function scrollToMainTab(index) {
+    const scroller = document.getElementById("main-tabs-scroller");
+    if (!scroller) return;
+    scroller.scrollTo({ left: index * scroller.clientWidth, behavior: "smooth" });
+    setActiveMainTab(index);
+}
+function setActiveMainTab(index) {
+    for (let i = 0; i < 3; i++) {
+        document.getElementById("main-tab-btn-" + i)?.classList.toggle("active", i === index);
+    }
+    const indicator = document.getElementById("main-tab-indicator");
+    if (indicator) indicator.style.transform = `translateX(${index * 100}%)`;
+    if (index === 2) { refreshOnlineUsers(); } // Online tab needs a fresh peer list
+}
+function initMainTabsScroller() {
+    const scroller = document.getElementById("main-tabs-scroller");
+    if (!scroller) return;
+    let scrollTimeout;
+    scroller.addEventListener("scroll", () => {
+        clearTimeout(scrollTimeout);
+        scrollTimeout = setTimeout(() => {
+            const index = Math.round(scroller.scrollLeft / scroller.clientWidth);
+            setActiveMainTab(index);
+        }, 80);
+    });
+}
+
 function openProfile() { closeAllMenus(); updateProfileScreen(); showScreen("profile-screen"); }
 function closeProfile() { showScreen("chatlist-screen"); }
-function openSOS() { closeAllMenus(); showScreen("sos-screen"); initSOSMap(); fetchSOSInfo(); }
-function closeSOS() { showScreen("chatlist-screen"); }
 function openThemePicker() { closeAllMenus(); buildThemeGrid(); showScreen("theme-screen"); }
 function openOnlineUsers() {
     closeAllMenus();
-    showScreen("online-screen");
-    // Add ourselves to the list so we're always visible
-    if (!isGhostMode) {
-        onlineUsers[userGhostID] = { displayName: userDisplayName + " (You)", online: true };
-    }
+    showScreen("chatlist-screen");
+    scrollToMainTab(2);
+}
+function refreshOnlineUsers() {
     // Refresh: make sure all open connections are in onlineUsers
     activeConnections.forEach(c => {
         if (c.open && !onlineUsers[c.peer]) {
             onlineUsers[c.peer] = { displayName: chatData[c.peer]?.displayName || c.peer, online: true };
+        }
+    });
+    // Also surface people we've chatted with before but aren't connected
+    // to right now, so the screen isn't empty for returning users.
+    Object.keys(chatData).forEach(peerId => {
+        if (!onlineUsers[peerId]) {
+            onlineUsers[peerId] = { displayName: chatData[peerId]?.displayName || peerId, online: false };
         }
     });
     renderOnlineUsers();
@@ -452,24 +505,6 @@ function stopFishAnimation() {
     fishes = [];
 }
 
-// ===== SHAKE TO SOS =====
-function initShakeDetect() {
-    if (!window.DeviceMotionEvent) return;
-    window.addEventListener("devicemotion", e => {
-        const a = e.accelerationIncludingGravity;
-        if (!a) return;
-        const total = Math.abs(a.x||0) + Math.abs(a.y||0) + Math.abs(a.z||0);
-        const now = Date.now();
-        if (total > shakeThreshold * 3 && now - shakeLastTime > 3000) {
-            shakeLastTime = now;
-            if (!sosActive) {
-                showToast("Shake detected — SOS activating!");
-                setTimeout(() => { openSOS(); toggleSOS(); }, 800);
-            }
-        }
-    });
-}
-
 // ===== MESH NETWORK =====
 function initMesh() {
     try {
@@ -525,6 +560,7 @@ function setupConn(conn) {
 
     conn.on('data', data => {
         if (!data || !data.type) return;
+        try {
         switch(data.type) {
             case "handshake-status":
                 if (data.approved) {
@@ -608,12 +644,6 @@ function setupConn(conn) {
                 }
                 break;
 
-            case "sos":
-                showToast("SOS from " + (data.senderName || data.sender) + "!");
-                if (navigator.vibrate) navigator.vibrate([300,100,300,100,300]);
-                showNearbyAlert(data);
-                break;
-
             case "presence":
                 // Always track peer who sent presence; add to activeConnections if not already there
                 updateOnlineUsers(data.sender, data.displayName || data.sender, data.online !== false);
@@ -625,6 +655,9 @@ function setupConn(conn) {
             case "status-update":
                 if (chatData[data.sender]) chatData[data.sender].status = data.status;
                 break;
+        }
+        } catch(e) {
+            console.error("Error handling incoming message from " + conn.peer + ":", e, data);
         }
     });
 
@@ -656,31 +689,39 @@ function addSystemMsg(peerId, text) {
 
 // ===== ONLINE USERS =====
 function updateOnlineUsers(peerId, displayName, isOnline) {
-    if (isOnline) onlineUsers[peerId] = { displayName, online: true };
-    else delete onlineUsers[peerId];
+    // Keep the peer entry even when they go offline (like Free Fire's
+    // friends list) instead of deleting it — it just gets flagged
+    // offline and renderOnlineUsers() dims it, rather than the card
+    // disappearing entirely.
+    if (onlineUsers[peerId]) {
+        onlineUsers[peerId].online = isOnline;
+        if (displayName) onlineUsers[peerId].displayName = displayName;
+    } else {
+        onlineUsers[peerId] = { displayName: displayName || peerId, online: isOnline };
+    }
     renderOnlineUsers();
 }
 
 function renderOnlineUsers() {
     const list = document.getElementById("online-users-list");
     if (!list) return;
-    const peers = Object.keys(onlineUsers);
+    const peers = Object.keys(onlineUsers).filter(id => id !== userGhostID);
     if (peers.length === 0) {
-        list.innerHTML = '<div class="system-msg" style="margin-top:30px;">No users online nearby</div>';
+        list.innerHTML = '<div class="system-msg" style="margin-top:30px;">No users online nearby.<br>Use "New Chat" or "Connect via WiFi" to find someone.</div>';
         return;
     }
     list.innerHTML = "";
     peers.forEach(peerId => {
         const u = onlineUsers[peerId];
         const item = document.createElement("div");
-        item.className = "online-user-item";
-        const alreadyConnected = activeConnections.some(c => c.peer === peerId);
+        const alreadyConnected = activeConnections.some(c => c.peer === peerId && c.open);
+        item.className = "online-user-item " + (alreadyConnected ? "is-online" : "is-offline");
         item.innerHTML = `
-            <div class="online-user-dot"></div>
-            <div class="online-user-name">${u.displayName}<br><span style="font-size:11px;color:var(--text3);">${peerId}</span></div>
+            <div class="online-user-dot" style="${alreadyConnected ? '' : 'background:var(--text3);'}"></div>
+            <div class="online-user-name">${u.displayName}<br><span style="font-size:11px;color:var(--text3);">${peerId}${alreadyConnected ? '' : ' · offline'}</span></div>
             ${alreadyConnected
                 ? `<button class="online-user-connect" style="background:var(--success);" onclick="openChat('${peerId}')">Open Chat</button>`
-                : `<button class="online-user-connect" onclick="connectToPeer('${peerId}');showToast('Connecting...')">Connect</button>`}
+                : `<button class="online-user-connect" onclick="connectToPeer('${peerId}');showToast('Connecting...')">Reconnect</button>`}
         `;
         list.appendChild(item);
     });
@@ -743,7 +784,8 @@ let offlineScanLoopId = null;
 
 function openOfflineConnect() {
     closeAllMenus();
-    showScreen("offline-screen");
+    showScreen("chatlist-screen");
+    scrollToMainTab(1);
     resetOfflinePanels();
 }
 
@@ -753,7 +795,7 @@ function closeOfflineConnect() {
         try { offlinePC.close(); } catch(e){}
         offlinePC = null; offlineDC = null;
     }
-    showScreen("chatlist-screen");
+    scrollToMainTab(0);
 }
 
 function resetOfflinePanels() {
@@ -765,9 +807,14 @@ function resetOfflinePanels() {
     document.getElementById("offline-join-step1").classList.remove("hidden");
     document.getElementById("offline-join-step2").classList.add("hidden");
     document.getElementById("offline-video-join").classList.add("hidden");
-    document.getElementById("offline-status-msg").innerText = "";
     document.getElementById("offline-qr-host").innerHTML = "";
     document.getElementById("offline-qr-join").innerHTML = "";
+    const msgEl = document.getElementById("offline-status-msg");
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        msgEl.innerText = "⚠️ You're opening this file directly, so the camera (QR scan) is blocked by the browser. Serve it over https:// or http://localhost for scanning to work.";
+    } else {
+        msgEl.innerText = "";
+    }
 }
 
 function switchOfflineTab(tab) {
@@ -833,6 +880,10 @@ function renderOfflineQR(elId, payloadObj) {
 
 // ----- HOST (creator) side -----
 async function startOfflineHost() {
+    if (typeof QRCode === "undefined") {
+        showToast("QR library not loaded — connect to internet once, then this works offline forever after");
+        return;
+    }
     try {
         offlinePC = new RTCPeerConnection(offlineIceConfig());
         offlineDC = offlinePC.createDataChannel("gm-offline");
@@ -930,6 +981,18 @@ function startOfflineJoinScan() {
 
 // ----- Shared camera scanning helper -----
 function startCameraScan(videoElId, canvasElId, onDecoded) {
+    if (typeof jsQR === "undefined") {
+        showToast("QR scanner library not loaded — connect to internet once, then this works offline forever after");
+        return;
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        // This is the file:// case — camera APIs are blocked by the
+        // browser outside a secure context (https:// or localhost).
+        showToast("Camera blocked: open this app via https:// or a local server (not by double-clicking the file) for QR scan to work");
+        const msgEl = document.getElementById("offline-status-msg");
+        if (msgEl) msgEl.innerText = "⚠️ Camera needs the app served over https:// or http://localhost — double-clicking the file won't work for scanning. \"New Chat\" (enter Ghost ID) still works fine.";
+        return;
+    }
     stopOfflineCamera();
     const video = document.getElementById(videoElId);
     const canvas = document.getElementById(canvasElId);
@@ -1240,7 +1303,22 @@ function setSelfDestruct(s) {
 }
 
 function broadcastToMesh(obj) {
-    activeConnections.forEach(c => { if (c?.open) c.send(obj); });
+    const dead = [];
+    activeConnections.forEach(c => {
+        try {
+            if (c?.open) c.send(obj);
+        } catch (e) {
+            // One bad connection must never stop the message reaching
+            // everyone else.
+            console.error("Send failed to", c?.peer, e);
+            dead.push(c);
+        }
+    });
+    // Prune connections that just proved themselves dead so future
+    // broadcasts don't keep failing on them.
+    if (dead.length) {
+        activeConnections = activeConnections.filter(c => !dead.includes(c));
+    }
 }
 
 // ===== TYPING =====
@@ -1566,6 +1644,7 @@ function initRadarMap() {
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(radarMapInstance);
         navigator.geolocation?.getCurrentPosition(pos => {
             userLat = pos.coords.latitude; userLng = pos.coords.longitude;
+            hasRealLocation = true;
             radarMapInstance.setView([userLat, userLng], 13);
             L.marker([userLat, userLng]).addTo(radarMapInstance).bindPopup(`<b>You (${userGhostID})</b>`).openPopup();
             spawnNearbyNodes(userLat, userLng, radarMapInstance);
@@ -1595,63 +1674,6 @@ function spawnNearbyNodes(lat, lng, mapInst) {
     if (activeConnections.length === 0) {
         L.popup().setLatLng([lat, lng]).setContent("No peers nearby yet").openOn(mapInst);
     }
-}
-
-// ===== SOS =====
-function initSOSMap() {
-    if (sosMapInstance) { setTimeout(() => sosMapInstance.invalidateSize(), 200); return; }
-    try {
-        sosMapInstance = L.map('sos-map').setView([userLat, userLng], 13);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(sosMapInstance);
-        L.marker([userLat, userLng]).addTo(sosMapInstance).bindPopup("Your Location").openPopup();
-        spawnNearbyNodes(userLat, userLng, sosMapInstance);
-    } catch(e) { console.error(e); }
-}
-
-function fetchSOSInfo() {
-    document.getElementById("sos-peers").innerText = activeConnections.length + " peers";
-    navigator.getBattery?.().then(b => { document.getElementById("sos-battery").innerText = Math.round(b.level*100) + "%"; });
-    navigator.geolocation?.getCurrentPosition(pos => {
-        userLat = pos.coords.latitude; userLng = pos.coords.longitude;
-        document.getElementById("sos-my-location").innerText = userLat.toFixed(4) + ", " + userLng.toFixed(4);
-    }, () => { document.getElementById("sos-my-location").innerText = "Location blocked"; });
-}
-
-function toggleSOS() {
-    const btn = document.getElementById("sos-main-btn");
-    if (!sosActive) {
-        sosActive = true;
-        btn.innerHTML = "STOP SOS ALERT";
-        btn.classList.add("active-sos");
-        document.getElementById("sos-title").innerText = "SOS ACTIVE!";
-        document.getElementById("sos-desc").innerText = "Broadcasting your location to all nearby Ghost Mesh peers...";
-        broadcastSOSNow();
-        sosInterval = setInterval(broadcastSOSNow, 15000);
-        showToast("SOS Alert sent to all peers!");
-        if (navigator.vibrate) navigator.vibrate([300,100,300,100,300]);
-    } else {
-        sosActive = false; clearInterval(sosInterval);
-        btn.innerHTML = "SEND SOS ALERT";
-        btn.classList.remove("active-sos");
-        document.getElementById("sos-title").innerText = "Emergency Help";
-        document.getElementById("sos-desc").innerText = "Press SOS to alert all nearby Ghost Mesh users with your live GPS location";
-        showToast("SOS stopped");
-    }
-}
-
-function broadcastSOSNow() {
-    broadcastToMesh({ type: "sos", sender: userGhostID, senderName: userDisplayName, lat: userLat, lng: userLng, senderDP: userCurrentDP, time: nowTime() });
-}
-
-function showNearbyAlert(data) {
-    const box = document.getElementById("nearby-alerts");
-    const list = document.getElementById("nearby-alerts-list");
-    box?.classList.remove("hidden");
-    if (!list) return;
-    const item = document.createElement("div");
-    item.style.cssText = "padding:10px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:10px;margin-bottom:8px;font-size:13px;";
-    item.innerHTML = `<b>${data.senderName || data.sender}</b><br>Lat: ${data.lat?.toFixed(4)}, Lng: ${data.lng?.toFixed(4)}<br>${data.time}<br><button onclick="connectToPeer('${data.sender}')" style="background:var(--danger);color:white;border:none;padding:5px 14px;border-radius:8px;margin-top:6px;cursor:pointer;font-weight:700;min-height:36px;">Respond</button>`;
-    list.prepend(item);
 }
 
 // ===== PUSH NOTIFICATION =====
@@ -1771,7 +1793,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // Prevent pull-to-refresh
 document.addEventListener("touchmove", e => {
-    if (e.target.closest("#messages-container, #chat-list-container, .sos-content, .profile-content, .modal-box, #online-users-list")) return;
+    if (e.target.closest("#messages-container, #chat-list-container, .profile-content, .modal-box, #online-users-list")) return;
     e.preventDefault();
 }, { passive: false });
 
