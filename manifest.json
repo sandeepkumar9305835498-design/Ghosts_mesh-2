@@ -16,7 +16,6 @@
     "microphone",
     "notifications",
     "vibrate",
-    "accelerometer",
     "storage"
   ],
   "icons": [
@@ -34,12 +33,6 @@
     }
   ],
   "shortcuts": [
-    {
-      "name": "SOS Emergency",
-      "short_name": "SOS",
-      "url": "./index.html?screen=sos",
-      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
-    },
     {
       "name": "New Chat",
       "short_name": "Chat",
