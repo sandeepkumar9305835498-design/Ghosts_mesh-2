@@ -10,9 +10,12 @@
     <title>Ghost Mesh</title>
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
-    <script src="peerjs.min.js"></script>
-    <link rel="stylesheet" href="leaflet.css"/>
-    <script src="leaflet.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.js"></script>
     <link rel="stylesheet" href="style.css">
 </head>
 <body onload="initApp()">
@@ -87,18 +90,6 @@
                 </div>
             </div>
             <div class="header-right">
-                <button class="icon-btn sos-icon-btn" onclick="openSOS()" title="SOS">
-                    <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
-                </button>
-                <button class="icon-btn" onclick="openOnlineUsers()" title="Online Users">
-                    <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-                </button>
-                <button class="icon-btn" onclick="toggleRadarMap()" title="Radar">
-                    <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
-                </button>
-                <button class="icon-btn" onclick="openNewConnect()" title="New Chat">
-                    <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
-                </button>
                 <div class="three-dot-wrap">
                     <button class="icon-btn" onclick="toggleMainMenu()">
                         <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
@@ -108,13 +99,17 @@
                             <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>
                             My Profile
                         </div>
-                        <div class="menu-item" onclick="openSOS()">
-                            <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
-                            SOS Emergency
+                        <div class="menu-item" onclick="openNewConnect()">
+                            <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+                            New Chat (Enter Ghost ID)
                         </div>
                         <div class="menu-item" onclick="openOnlineUsers()">
                             <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
                             Online Users
+                        </div>
+                        <div class="menu-item" onclick="toggleRadarMap()">
+                            <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
+                            Radar Map
                         </div>
                         <div class="menu-item" onclick="openThemePicker()">
                             <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8z"/></svg>
@@ -141,44 +136,102 @@
             </div>
         </header>
 
-        <div class="search-bar-wrap">
-            <div class="search-bar">
-                <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16" class="search-icon-svg"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-                <input type="text" id="chat-search" placeholder="Search chats..." oninput="filterChats(this.value)">
+        <!-- WHATSAPP-STYLE SWIPE TABS -->
+        <div class="main-tabs-bar">
+            <button class="main-tab-btn active" id="main-tab-btn-0" onclick="scrollToMainTab(0)">Chats</button>
+            <button class="main-tab-btn" id="main-tab-btn-1" onclick="scrollToMainTab(1)">WiFi</button>
+            <button class="main-tab-btn" id="main-tab-btn-2" onclick="scrollToMainTab(2)">Online</button>
+            <div class="main-tab-indicator" id="main-tab-indicator"></div>
+        </div>
+
+        <div class="main-tabs-scroller" id="main-tabs-scroller">
+
+            <!-- TAB 1: CHATS -->
+            <div class="main-tab-panel" id="main-tab-panel-0">
+                <div class="search-bar-wrap">
+                    <div class="search-bar">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16" class="search-icon-svg"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+                        <input type="text" id="chat-search" placeholder="Search chats..." oninput="filterChats(this.value)">
+                    </div>
+                </div>
+
+                <div id="map-container" class="hidden">
+                    <div id="live-radar-map"></div>
+                    <button class="map-close-btn" onclick="toggleRadarMap()">Close Map</button>
+                </div>
+
+                <div id="chat-list-container">
+                    <div class="empty-state" id="empty-state">
+                        <img src="icon-512.png" width="80" height="80" style="border-radius:20px;margin-bottom:16px;">
+                        <h3>No chats yet</h3>
+                        <p>Connect with nearby peers on the mesh</p>
+                        <button class="primary-btn" style="width:auto;padding:12px 28px;" onclick="openNewConnect()">Connect to Peer</button>
+                    </div>
+                </div>
+                <input type="file" id="dp-file-input" accept="image/*" style="display:none;" onchange="handleDPChange(event)">
             </div>
-        </div>
 
-        <div id="map-container" class="hidden">
-            <div id="live-radar-map"></div>
-            <button class="map-close-btn" onclick="toggleRadarMap()">Close Map</button>
-        </div>
+            <!-- TAB 2: WIFI (OFFLINE CONNECT) -->
+            <div class="main-tab-panel" id="main-tab-panel-1">
+                <div style="padding:16px;">
+                    <p class="sub" style="text-align:center;margin-bottom:14px;">Works on the same WiFi/hotspot — no internet required. One device creates, the other joins.</p>
 
-        <div id="chat-list-container">
-            <div class="empty-state" id="empty-state">
-                <img src="icon-512.png" width="80" height="80" style="border-radius:20px;margin-bottom:16px;">
-                <h3>No chats yet</h3>
-                <p>Connect with nearby peers on the mesh</p>
-                <button class="primary-btn" style="width:auto;padding:12px 28px;" onclick="openNewConnect()">Connect to Peer</button>
+                    <div class="offline-tabs">
+                        <button id="offline-tab-create" class="offline-tab-btn active" onclick="switchOfflineTab('create')">Create Chat</button>
+                        <button id="offline-tab-join" class="offline-tab-btn" onclick="switchOfflineTab('join')">Join Chat</button>
+                    </div>
+
+                    <!-- CREATE FLOW -->
+                    <div id="offline-create-panel" class="offline-panel">
+                        <div id="offline-create-step1">
+                            <button class="primary-btn" onclick="startOfflineHost()">Generate My QR</button>
+                        </div>
+                        <div id="offline-create-step2" class="hidden" style="text-align:center;">
+                            <p class="sub">Show this to your friend, let them scan it</p>
+                            <div id="offline-qr-host" class="offline-qr-box"></div>
+                            <button class="primary-btn" style="margin-top:14px;" onclick="switchToScanAnswer()">Next: Scan Their Reply QR</button>
+                        </div>
+                        <div id="offline-create-step3" class="hidden">
+                            <p class="sub" style="text-align:center;">Point camera at their reply QR</p>
+                            <video id="offline-video-host" playsinline autoplay class="offline-video"></video>
+                            <canvas id="offline-canvas-host" class="hidden"></canvas>
+                        </div>
+                        <div id="offline-create-step4" class="hidden" style="text-align:center;">
+                            <p class="sub">Connecting...</p>
+                        </div>
+                    </div>
+
+                    <!-- JOIN FLOW -->
+                    <div id="offline-join-panel" class="offline-panel hidden">
+                        <div id="offline-join-step1">
+                            <button class="primary-btn" onclick="startOfflineJoinScan()">Scan Their QR</button>
+                            <video id="offline-video-join" playsinline autoplay class="offline-video hidden"></video>
+                            <canvas id="offline-canvas-join" class="hidden"></canvas>
+                        </div>
+                        <div id="offline-join-step2" class="hidden" style="text-align:center;">
+                            <p class="sub">Show this reply QR to them so they can scan it</p>
+                            <div id="offline-qr-join" class="offline-qr-box"></div>
+                            <p class="sub" id="offline-join-status">Waiting for connection...</p>
+                        </div>
+                    </div>
+
+                    <p id="offline-status-msg" class="sub" style="text-align:center;margin-top:14px;color:var(--accent);"></p>
+                </div>
             </div>
-        </div>
-        <input type="file" id="dp-file-input" accept="image/*" style="display:none;" onchange="handleDPChange(event)">
-    </div>
 
-    <!-- ONLINE USERS -->
-    <div id="online-screen" class="app-screen hidden">
-        <header class="app-header">
-            <button class="back-btn" onclick="showScreen('chatlist-screen')">
-                <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
-            </button>
-            <h3 class="header-title">Online Users</h3>
-        </header>
-        <div id="online-users-list" style="flex:1;overflow-y:auto;padding:12px;">
-            <div class="system-msg" style="margin-top:30px;">Scanning mesh network...</div>
+            <!-- TAB 3: ONLINE USERS -->
+            <div class="main-tab-panel" id="main-tab-panel-2">
+                <div id="online-users-list" style="flex:1;overflow-y:auto;padding:12px;">
+                    <div class="system-msg" style="margin-top:30px;">Scanning mesh network...</div>
+                </div>
+            </div>
+
         </div>
     </div>
 
     <!-- CHAT SCREEN -->
     <div id="chat-screen" class="app-screen hidden">
+        <div id="fish-canvas-wrap" class="hidden"><canvas id="fish-canvas"></canvas></div>
         <header class="app-header">
             <div class="header-left">
                 <button class="back-btn" onclick="goBackToList()">
@@ -320,39 +373,6 @@
         </div>
     </div>
 
-    <!-- SOS SCREEN -->
-    <div id="sos-screen" class="app-screen hidden">
-        <header class="app-header sos-header-bar">
-            <button class="back-btn" onclick="closeSOS()">
-                <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
-            </button>
-            <h3 class="header-title" style="color:#ef4444;">SOS Emergency</h3>
-        </header>
-        <div class="sos-content">
-            <div class="sos-status-box">
-                <div class="sos-pulse-ring"></div>
-                <div class="sos-main-icon">
-                    <svg viewBox="0 0 24 24" fill="currentColor" width="40" height="40"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
-                </div>
-                <h2 id="sos-title">Emergency Help</h2>
-                <p id="sos-desc">Press SOS to alert all nearby Ghost Mesh users with your live GPS location</p>
-            </div>
-            <div class="sos-grid">
-                <div class="sos-card"><div class="sos-card-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg></div><div class="sos-card-label">Location</div><div class="sos-card-val" id="sos-my-location">Fetching...</div></div>
-                <div class="sos-card"><div class="sos-card-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M15.67 4H14V2h-4v2H8.33C7.6 4 7 4.6 7 5.33v15.33C7 21.4 7.6 22 8.33 22h7.33c.74 0 1.34-.6 1.34-1.33V5.33C17 4.6 16.4 4 15.67 4z"/></svg></div><div class="sos-card-label">Battery</div><div class="sos-card-val" id="sos-battery">--</div></div>
-                <div class="sos-card"><div class="sos-card-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg></div><div class="sos-card-label">Nearby</div><div class="sos-card-val" id="sos-peers">0 peers</div></div>
-                <div class="sos-card"><div class="sos-card-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/></svg></div><div class="sos-card-label">Signal</div><div class="sos-card-val" id="sos-signal">P2P Mesh</div></div>
-            </div>
-            <div id="sos-map-wrap"><div id="sos-map"></div></div>
-            <button id="sos-main-btn" class="sos-main-btn" onclick="toggleSOS()">SEND SOS ALERT</button>
-            <button class="location-share-btn" onclick="shareLiveLocation()">Share Live Location (15 min)</button>
-            <div id="nearby-alerts" class="nearby-alerts hidden">
-                <h4>Nearby SOS Alerts</h4>
-                <div id="nearby-alerts-list"></div>
-            </div>
-        </div>
-    </div>
-
     <!-- THEME PICKER -->
     <div id="theme-screen" class="app-screen hidden">
         <header class="app-header">
@@ -365,6 +385,7 @@
             <div class="theme-grid" id="theme-grid"></div>
         </div>
     </div>
+
 
 </div>
 
