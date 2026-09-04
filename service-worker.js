@@ -16,7 +16,7 @@ const urlsToCache = [
   "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js",
   "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js",
   "https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js",
-  "https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.js"
+  "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"
 ];
 
 self.addEventListener("install", event => {
