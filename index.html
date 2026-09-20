@@ -59,14 +59,19 @@
             <input type="text" id="user-display-name" placeholder="Enter your name">
         </div>
         <div class="input-group">
-            <label>Phone Number</label>
+            <label>Phone Number <span class="optional">(optional — never used for your ID)</span></label>
             <input type="tel" id="phone-number" placeholder="+91 XXXXX XXXXX">
+            <p class="field-hint">Your Ghost ID is generated from a random local seed, never from your number.</p>
         </div>
         <div class="input-group">
             <label>App Lock PIN <span class="optional">(optional)</span></label>
             <input type="password" id="set-pin-input" placeholder="4-digit PIN" maxlength="4">
         </div>
         <button class="primary-btn" onclick="verifyAndLogin()">Enter the Mesh</button>
+        <button class="ghost-assistant-link" onclick="gmOpenGhostAssistant()">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>
+            Restore an existing Ghost ID
+        </button>
         <p class="privacy-note">100% Private · Zero Cloud · No Account</p>
     </div>
 </div>
@@ -91,7 +96,7 @@
             </div>
             <div class="header-right">
                 <button id="credits-pill-btn" class="credits-pill-btn" onclick="openPremiumModal()">
-                    <span class="credits-pill-icon">👻</span>
+                    <span class="credits-pill-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg></span>
                     <span class="credits-pill-word">Ghost</span>
                     <span id="credits-pill-amount">0</span>
                 </button>
@@ -114,7 +119,11 @@
                         </div>
                         <div class="menu-item" onclick="openOnlineUsers()">
                             <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-                            Online Users
+                            Nearby Ghosts
+                        </div>
+                        <div class="menu-item" onclick="closeAllMenus();gmOpenGhostAssistant()">
+                            <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>
+                            Ghost Assistant (Recover ID)
                         </div>
                         <div class="menu-item" onclick="toggleRadarMap()">
                             <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
@@ -153,7 +162,6 @@
         <div class="main-tabs-bar">
             <button class="main-tab-btn active" id="main-tab-btn-0" onclick="scrollToMainTab(0)">Chats</button>
             <button class="main-tab-btn" id="main-tab-btn-1" onclick="scrollToMainTab(1)">WiFi</button>
-            <button class="main-tab-btn" id="main-tab-btn-2" onclick="scrollToMainTab(2)">Online</button>
             <div class="main-tab-indicator" id="main-tab-indicator"></div>
         </div>
 
@@ -181,6 +189,19 @@
                         <button class="primary-btn" style="width:auto;padding:12px 28px;" onclick="openNewConnect()">Connect to Peer</button>
                     </div>
                 </div>
+
+                <!-- ONLINE NEARBY — merged into the Chats tab, no separate tab.
+                     Same data source and same render function as the WiFi tab's
+                     "Ghosts You Can Reach" list, so both always stay in sync. -->
+                <div class="nearby-section" id="nearby-section">
+                    <div class="nearby-head">
+                        <span class="nearby-title">
+                            <span class="nearby-pulse"></span> Online Nearby
+                        </span>
+                        <span class="nearby-count" id="nearby-count">0</span>
+                    </div>
+                    <div id="nearby-ghosts-list" class="nearby-list"></div>
+                </div>
                 <input type="file" id="dp-file-input" accept="image/*" style="display:none;" onchange="handleDPChange(event)">
             </div>
 
@@ -195,7 +216,13 @@
                         </label>
                     </div>
                     <div class="radar-header-icons">
-                        <button id="radar-qr-icon-btn" class="radar-icon-btn" onclick="startOfflineJoinScan()">
+                        <!-- Two SMALL icon-only actions: show my QR / scan a QR.
+                             They replace the old Create/Join split buttons and the
+                             full-width "Generate My QR" button. -->
+                        <button id="radar-show-qr-icon-btn" class="radar-icon-btn" title="Show my QR code" onclick="startOfflineHost()">
+                            <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M3 3h8v8H3V3zm2 2v4h4V5H5zm8-2h8v8h-8V3zm2 2v4h4V5h-4zM3 13h8v8H3v-8zm2 2v4h4v-4H5zm8-2h3v3h-3v-3zm5 0h3v3h-3v-3zm-5 5h3v3h-3v-3zm5 0h3v3h-3v-3zm-2.5-2.5h3v3h-3v-3z"/></svg>
+                        </button>
+                        <button id="radar-qr-icon-btn" class="radar-icon-btn" title="Scan a QR code" onclick="startOfflineJoinScan()">
                             <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M3 11h8V3H3v8zm2-6h4v4H5V5zM3 21h8v-8H3v8zm2-6h4v4H5v-4zM13 3v8h8V3h-8zm6 6h-4V5h4v4zM19 19h2v2h-2zM13 13h2v2h-2zM15 15h2v2h-2zM13 17h2v2h-2zM17 17h2v2h-2zM15 19h2v2h-2zM17 13h2v2h-2zM19 15h2v2h-2z"/></svg>
                         </button>
                         <div class="three-dot-wrap">
@@ -203,9 +230,9 @@
                                 <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm0 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg>
                             </button>
                             <div id="radar-dot-menu" class="dot-menu hidden">
-                                <div class="menu-item" id="menu-ghost-direct" onclick="onGhostDirectClick()">📡 Ghost Direct</div>
-                                <div class="menu-item" onclick="closeAllMenus();showToast('Smart Radar tunes scan frequency for battery life')">🧠 Smart Radar</div>
-                                <div class="menu-item" onclick="closeAllMenus();showToast('Advanced settings — coming soon')">⚙️ Advanced settings</div>
+                                <div class="menu-item" id="menu-ghost-direct" onclick="onGhostDirectClick()"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm0-13a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm0 8a3 3 0 1 1 0-6 3 3 0 0 1 0 6z"/></svg> Ghost Direct</div>
+                                <div class="menu-item" onclick="closeAllMenus();showToast('Smart Radar tunes scan frequency for battery life')"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M13 3a4 4 0 0 0-3.9 3.1A3.5 3.5 0 0 0 6 9.5c0 .9.3 1.7.9 2.3A4 4 0 0 0 6.5 15 4.5 4.5 0 0 0 11 19.5c.7 0 1.4-.2 2-.5V3zM13 3v16.5c.6.3 1.3.5 2 .5a4.5 4.5 0 0 0 4.5-4.5c0-1.2-.5-2.3-1.4-3.2.6-.6.9-1.4.9-2.3a3.5 3.5 0 0 0-3.1-3.4A4 4 0 0 0 13 3z"/></svg> Smart Radar</div>
+                                <div class="menu-item" onclick="closeAllMenus();showToast('Advanced settings — coming soon')"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M19.14 12.94a7.1 7.1 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.3 7.3 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.1 7.1 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.22.39.3.6.22l2.39-.96c.5.38 1.04.7 1.63.94l.36 2.54c.05.24.25.42.5.42h3.84c.25 0 .45-.18.5-.42l.36-2.54c.59-.24 1.13-.56 1.63-.94l2.39.96c.22.08.47 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg> Advanced settings</div>
                             </div>
                         </div>
                     </div>
@@ -213,18 +240,25 @@
                 <p id="radar-off-msg" class="sub hidden" style="text-align:center;margin-top:40px;">To see nearby Ghosts, turn on Radar.</p>
 
                 <div id="radar-body">
-                <div style="padding:0 16px 16px;">
-                    <p class="sub" style="text-align:center;margin-bottom:14px;">Works on the same WiFi/hotspot — no internet required. One device creates, the other joins.</p>
 
-                    <div class="offline-tabs">
-                        <button id="offline-tab-create" class="offline-tab-btn active" onclick="switchOfflineTab('create')">Create Chat</button>
-                        <button id="offline-tab-join" class="offline-tab-btn" onclick="switchOfflineTab('join')">Join Chat</button>
+                    <!-- GHOSTS YOU CAN REACH — auto-populating, same shared render
+                         function as the Chats tab's "Online Nearby" list -->
+                    <div class="reach-section">
+                        <div class="reach-head">
+                            <span class="reach-title">Ghosts You Can Reach</span>
+                            <span class="nearby-count" id="wifi-reach-count">0</span>
+                        </div>
+                        <div id="wifi-reach-list" class="reach-list"></div>
                     </div>
+
+                <div id="offline-flow-wrap" class="hidden">
+                <div style="padding:0 16px 16px;">
+                    <p class="sub" style="text-align:center;margin-bottom:14px;">Works on the same WiFi/hotspot — no internet required. One device shows its QR, the other scans it.</p>
 
                     <!-- CREATE FLOW -->
                     <div id="offline-create-panel" class="offline-panel">
                         <div id="offline-create-step1">
-                            <button class="primary-btn" onclick="startOfflineHost()">Generate My QR</button>
+                            <p class="sub" style="text-align:center;">Generating your QR code…</p>
                         </div>
                         <div id="offline-create-step2" class="hidden" style="text-align:center;">
                             <p class="sub">Show this to your friend, let them scan it</p>
@@ -266,17 +300,37 @@
                     <p id="offline-status-msg" class="sub" style="text-align:center;margin-top:14px;color:var(--accent);"></p>
                 </div>
                 </div>
-            </div>
-
-            <!-- TAB 3: ONLINE USERS -->
-            <div class="main-tab-panel" id="main-tab-panel-2">
-                <div id="online-users-list" style="flex:1;overflow-y:auto;padding:12px;">
-                    <div class="system-msg" style="margin-top:30px;">Scanning mesh network...</div>
                 </div>
             </div>
 
         </div>
     </div>
+
+    <!-- BOTTOM FLOATING PILL NAV (new) — the swipeable tab bar at the top is kept
+     exactly as it was; this adds a second, faster way to reach the same places
+     plus a one-tap "New connection" action and the profile. Visibility and the
+     sliding highlight capsule are driven from script.js (gmNavGo /
+     gmSyncBottomNav), so it can never disagree with the top tab bar.
+     position:fixed, so sitting here in the DOM costs nothing. -->
+<nav id="gm-bottom-nav" class="gm-nav hidden" aria-label="Main navigation">
+    <span class="gm-nav-pill" id="gm-nav-pill" aria-hidden="true"></span>
+    <button class="gm-nav-item" data-nav="chats" onclick="gmNavGo('chats')" aria-label="Chats">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="21" height="21"><path d="M21 6h-2v9H6v2c0 .55.45 1 1 1h11l4 4V7c0-.55-.45-1-1-1zm-4 6V3c0-.55-.45-1-1-1H3c-.55 0-1 .45-1 1v14l4-4h10c.55 0 1-.45 1-1z"/></svg>
+        <span class="gm-nav-label">Chats</span>
+    </button>
+    <button class="gm-nav-item" data-nav="wifi" onclick="gmNavGo('wifi')" aria-label="WiFi">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="21" height="21"><path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/></svg>
+        <span class="gm-nav-label">WiFi</span>
+    </button>
+    <button class="gm-nav-item" data-nav="connect" onclick="gmNavGo('connect')" aria-label="New connection">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="21" height="21"><path d="M15 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm-9-2V7H4v3H1v2h3v3h2v-3h3v-2H6zm9 4c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+        <span class="gm-nav-label">Connect</span>
+    </button>
+    <button class="gm-nav-item" data-nav="profile" onclick="gmNavGo('profile')" aria-label="My profile">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="21" height="21"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>
+        <span class="gm-nav-label">Profile</span>
+    </button>
+</nav>
 
     <!-- CHAT SCREEN -->
     <div id="chat-screen" class="app-screen hidden">
@@ -314,7 +368,7 @@
                     </button>
                     <div id="chat-menu" class="dropdown-menu hidden">
                         <div class="menu-item" onclick="openSendCreditModal()">
-                            <span style="font-size:16px;">👻</span>
+                            <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>
                             Send Credit
                         </div>
                         <div class="menu-item" onclick="shareLiveLocation()">
@@ -362,7 +416,7 @@
         <div id="view-once-badge" class="hidden view-once-banner">View Once mode — message disappears after reading</div>
         <div id="edit-preview" class="hidden reply-preview-bar">
             <div class="reply-preview-content">
-                <span>✏️ Editing message</span>
+                <span><svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg> Editing message</span>
             </div>
             <button onclick="cancelEditMessage()" class="reply-cancel-btn">
                 <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -456,29 +510,36 @@
                     <div class="field-value">P2P · No Server · Encrypted</div>
                 </div>
             </div>
-            <!-- CREDITS & PREMIUM -->
+            <!-- CREDITS & PREMIUM — deliberately compact: one slim widget row
+                 (icon + balance + earn icons), not a dominant card -->
             <div class="credits-card">
-                <div class="credits-row">
-                    <div>
-                        <div class="credits-label">👻 Ghost Credits</div>
-                        <div class="credits-amount" id="credits-amount">0</div>
+                <div class="credits-mini-row">
+                    <span class="credits-mini-icon">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>
+                    </span>
+                    <span class="credits-amount" id="credits-amount">0</span>
+                    <span class="credits-mini-label">credits</span>
+                    <button class="premium-badge-btn" onclick="openPremiumModal()">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="11" height="11"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+                        Premium
+                    </button>
+                    <div class="credits-mini-actions">
+                        <button class="credits-earn-btn credits-earn-icon" title="Watch an ad — earn +5" aria-label="Watch an ad for 5 credits" onclick="watchAdForCredits()">
+                            <svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><path d="M8 5v14l11-7z"/></svg>
+                        </button>
+                        <button class="credits-earn-btn credits-earn-icon" title="Share the app — earn +5" aria-label="Share the app for 5 credits" onclick="shareAppForCredits()">
+                            <svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L7.04 9.81C6.5 9.31 5.79 9 5 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/></svg>
+                        </button>
                     </div>
-                    <button class="premium-badge-btn" onclick="openPremiumModal()">⭐ Go Premium</button>
                 </div>
-                <div class="credits-earn-row">
-                    <button class="credits-earn-btn" onclick="watchAdForCredits()">
-                        <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M8 5v14l11-7z"/></svg>
-                        Watch Ad (+5)
-                    </button>
-                    <button class="credits-earn-btn" onclick="shareAppForCredits()">
-                        <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L7.04 9.81C6.5 9.31 5.79 9 5 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/></svg>
-                        Share App (+5)
-                    </button>
-                </div>
-                <p id="credits-eligibility-msg" class="sub hidden" style="text-align:center;margin-top:8px;color:var(--danger);"></p>
+                <p id="credits-eligibility-msg" class="sub hidden" style="text-align:center;margin-top:6px;color:var(--danger);font-size:11px;"></p>
             </div>
 
             <button class="primary-btn" onclick="copyGhostID()">Copy My Ghost ID</button>
+            <button class="secondary-btn" onclick="gmOpenPhraseBackup()">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M18 8h-1V6a5 5 0 0 0-10 0v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zM9 6a3 3 0 0 1 6 0v2H9V6zm3 12a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/></svg>
+                Show my 12-word Recovery Phrase
+            </button>
             <button class="danger-btn-full" onclick="logoutApp()">Logout</button>
         </div>
     </div>
@@ -487,11 +548,12 @@
          action fails, with a one-tap way to earn more immediately -->
     <div id="not-enough-credits-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeNotEnoughCreditsModal()">
         <div class="modal-box not-enough-credits-box">
-            <div style="font-size:32px;text-align:center;">👻</div>
+            <div class="modal-icon-badge"><svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg></div>
             <h4 style="text-align:center;margin:6px 0 2px;">Not Enough Credits</h4>
             <p class="sub" style="text-align:center;" id="not-enough-credits-msg">You need more credits for this.</p>
             <button class="primary-btn" onclick="watchAdForCredits();closeNotEnoughCreditsModal()">
-                ▶️ Watch Ad — Earn +5 Credits
+                <svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><path d="M8 5v14l11-7z"/></svg>
+                Watch Ad — Earn +5 Credits
             </button>
             <button class="credits-earn-btn" style="width:100%;margin-top:8px;" onclick="shareAppForCredits();closeNotEnoughCreditsModal()">
                 Share App — Earn +5 Credits
@@ -504,7 +566,7 @@
     <div id="send-credit-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeSendCreditModal()">
         <div class="modal-box send-credit-box">
             <div class="send-credit-header">
-                <span style="font-size:22px;">👻</span>
+                <span class="modal-icon-badge small"><svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg></span>
                 <div>
                     <h4 style="margin:0;">Send Credit</h4>
                     <p class="sub" style="margin:0;">Send Ghost Credits to <span id="send-credit-peer-name">this chat</span></p>
@@ -512,40 +574,47 @@
             </div>
             <div class="send-credit-amounts">
                 <button class="send-credit-amount-btn amt-green" data-amt="2" onclick="pickCreditAmount(2)">
-                    <span class="amt-icon">👻</span><span class="amt-num">2</span><span class="amt-label">Credits</span>
+                    <span class="amt-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg></span><span class="amt-num">2</span><span class="amt-label">Credits</span>
                 </button>
                 <button class="send-credit-amount-btn amt-purple active" data-amt="5" onclick="pickCreditAmount(5)">
-                    <span class="amt-icon">👻</span><span class="amt-num">5</span><span class="amt-label">Credits</span>
+                    <span class="amt-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg></span><span class="amt-num">5</span><span class="amt-label">Credits</span>
                 </button>
                 <button class="send-credit-amount-btn amt-dark" data-amt="10" onclick="pickCreditAmount(10)">
-                    <span class="amt-icon">👻</span><span class="amt-num">10</span><span class="amt-label">Credits</span>
+                    <span class="amt-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg></span><span class="amt-num">10</span><span class="amt-label">Credits</span>
                 </button>
             </div>
             <button class="primary-btn send-credit-confirm" id="send-credit-confirm-btn" onclick="confirmSendCredit()">
-                <span>👻 Send 5 Credits</span>
+                <span>Send 5 Credits</span>
                 <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/></svg>
             </button>
             <button class="cancel-btn" style="width:100%;margin-top:8px;" onclick="closeSendCreditModal()">Cancel</button>
         </div>
     </div>
 
-    <!-- PREMIUM MODAL -->
+    <!-- PREMIUM MODAL — redesigned: dark-surface card with accent-purple hero,
+         inline-SVG feature icons (no emoji) and tighter vertical rhythm -->
     <div id="premium-modal" class="modal-overlay hidden" onclick="if(event.target===this)closePremiumModal()">
         <div class="modal-box premium-modal-box">
+            <div class="premium-hero">
+                <span class="premium-hero-badge"><svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg></span>
+                <h3>Ghost Mesh Premium</h3>
+                <p class="premium-hero-sub">Every perk unlocked — no per-call credits, no limits.</p>
+            </div>
+
             <div class="premium-credits-row">
-                <span class="credits-pill-icon">👻</span>
+                <span class="credits-mini-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg></span>
                 <span id="premium-modal-credits">0</span>
                 <span class="sub" style="margin:0;">Ghost Credits</span>
             </div>
-            <h3 style="text-align:center;">⭐ Ghost Mesh Premium</h3>
+
             <ul class="premium-feature-list">
-                <li>🎙️ Voice Changer (calls & voice notes)</li>
-                <li>🖼️ Custom Chat Wallpapers</li>
-                <li>📌 Unlimited Pinned Messages</li>
-                <li>🎨 Exclusive Message Bubble Themes</li>
-                <li>⏱️ Extended Self-Destruct Timers</li>
-                <li>🔒 Hidden Chat Folder</li>
-                <li>📹 HD Video Calls (no per-call credit cost)</li>
+                <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg></span><span class="pf-text"><span class="pf-title">Voice Changer</span><span class="pf-sub">calls &amp; voice notes</span></span></li>
+                <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg></span><span class="pf-text"><span class="pf-title">Custom Chat Wallpapers</span><span class="pf-sub">free of the default look</span></span></li>
+                <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg></span><span class="pf-text"><span class="pf-title">Unlimited Pinned Messages</span><span class="pf-sub">free accounts get 1</span></span></li>
+                <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9c-.83 0-1.5-.67-1.5-1.5S5.67 9 6.5 9 8 9.67 8 10.5 7.33 12 6.5 12zm3-4C8.67 8 8 7.33 8 6.5S8.67 5 9.5 5s1.5.67 1.5 1.5S10.33 8 9.5 8zm5 0c-.83 0-1.5-.67-1.5-1.5S13.67 5 14.5 5s1.5.67 1.5 1.5S15.33 8 14.5 8zm3 4c-.83 0-1.5-.67-1.5-1.5S16.67 9 17.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg></span><span class="pf-text"><span class="pf-title">Exclusive Bubble Themes</span><span class="pf-sub">plus every accent colour</span></span></li>
+                <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm.5-13H11v6l5.2 3.1.8-1.3-4.5-2.7V7z"/></svg></span><span class="pf-text"><span class="pf-title">Extended Self-Destruct Timers</span><span class="pf-sub">up to 1 hour and beyond</span></span></li>
+                <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M18 8h-1V6a5 5 0 0 0-10 0v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zM9 6a3 3 0 0 1 6 0v2H9V6zm3 12a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/></svg></span><span class="pf-text"><span class="pf-title">Hidden Chat Folder</span><span class="pf-sub">PIN-protected, off the list</span></span></li>
+                <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg></span><span class="pf-text"><span class="pf-title">HD Video Calls</span><span class="pf-sub">no per-call credit cost</span></span></li>
             </ul>
 
             <div class="premium-plans">
@@ -563,10 +632,10 @@
                     <span class="plan-price">$50</span>
                 </button>
             </div>
-            <p class="sub" style="text-align:center;">Real payments come later (Play Billing after native APK) — for now, purchases are simulated for testing.</p>
+            <p class="premium-note">Real payments arrive with Play Billing in the Android build — for now purchases are simulated for testing.</p>
 
             <div class="premium-earn-section">
-                <p class="sub" style="margin-bottom:8px;text-align:center;">Or earn credits for free:</p>
+                <p class="premium-earn-title">Or earn credits for free</p>
                 <div class="credits-earn-row">
                     <button class="credits-earn-btn" onclick="watchAdForCredits()">
                         <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M8 5v14l11-7z"/></svg>
@@ -585,6 +654,91 @@
             </div>
 
             <button class="cancel-btn" style="width:100%;margin-top:8px;" onclick="closePremiumModal()">Maybe Later</button>
+        </div>
+    </div>
+
+
+    <!-- ============ IDENTITY: 12-WORD RECOVERY PHRASE (all local, no server) ============ -->
+
+    <!-- Shown once at signup. Mandatory: the phrase must be confirmed before the
+         user can continue, and the overlay cannot be dismissed with back/outside tap. -->
+    <div id="phrase-setup-modal" class="modal-overlay hidden">
+        <div class="modal-box phrase-modal-box">
+            <div class="phrase-head">
+                <span class="phrase-head-badge"><svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg></span>
+                <div>
+                    <h4>Your Recovery Phrase</h4>
+                    <p class="sub">The only way to get this Ghost ID back on a new phone.</p>
+                </div>
+            </div>
+
+            <div id="phrase-show-step" class="phrase-step">
+                <p class="phrase-warning">
+                    Write these 12 words down on paper, in this order. There is no server,
+                    no account and no reset link — if you lose both this phone and these
+                    words, this Ghost ID is gone forever. Anyone who has the words can
+                    become you, so never share or screenshot them.
+                </p>
+                <div class="phrase-grid" id="phrase-words"></div>
+                <label class="phrase-check">
+                    <input type="checkbox" id="phrase-saved-check" onchange="gmPhraseSavedChanged()">
+                    <span>I wrote all 12 words down and kept them somewhere safe</span>
+                </label>
+                <button class="primary-btn" id="phrase-continue-btn" disabled onclick="gmPhraseContinue()">Continue</button>
+                <button class="credits-earn-btn phrase-copy-btn" onclick="gmCopyPhrase()"><svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L7.04 9.81C6.5 9.31 5.79 9 5 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/></svg> Copy phrase</button>
+                <p class="phrase-error hidden" id="phrase-random-warning">This device's random generator looks unreliable — write the words down and consider another device.</p>
+            </div>
+
+            <div id="phrase-verify-step" class="phrase-step hidden">
+                <p class="sub">Prove you saved it: type these words from your list.</p>
+                <div id="phrase-verify-fields" class="phrase-verify-fields"></div>
+                <p class="phrase-error hidden" id="phrase-verify-error"></p>
+                <button class="primary-btn" onclick="gmPhraseVerify()">Verify &amp; continue</button>
+                <button class="cancel-btn phrase-back-btn" onclick="gmPhraseBackToShow()">Show the words again</button>
+            </div>
+
+            <p class="phrase-lost-note">No skip. No server backup. This is the same trade-off as a crypto wallet seed phrase.</p>
+        </div>
+    </div>
+
+    <!-- Profile → "Show my 12-word Recovery Phrase" -->
+    <div id="phrase-backup-modal" class="modal-overlay hidden" onclick="if(event.target===this)gmCloseIdentityModals()">
+        <div class="modal-box phrase-modal-box">
+            <div class="phrase-head">
+                <span class="phrase-head-badge"><svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg></span>
+                <div>
+                    <h4>Recovery Phrase</h4>
+                    <p class="sub">For <span id="phrase-backup-id">this Ghost ID</span></p>
+                </div>
+            </div>
+            <p class="phrase-warning">Anyone who reads these 12 words can take over this Ghost ID. Make sure nobody is watching your screen.</p>
+            <div class="phrase-grid" id="phrase-backup-words"></div>
+            <button class="credits-earn-btn phrase-copy-btn" onclick="gmCopyPhrase()"><svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L7.04 9.81C6.5 9.31 5.79 9 5 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/></svg> Copy phrase</button>
+            <button class="cancel-btn" style="width:100%;margin-top:10px;" onclick="gmCloseIdentityModals()">Close</button>
+        </div>
+    </div>
+
+    <!-- ============ GHOST ASSISTANT: rebuild a Ghost ID from the 12 words ============ -->
+    <div id="ghost-assistant-modal" class="modal-overlay hidden" onclick="if(event.target===this)gmCloseIdentityModals()">
+        <div class="modal-box assistant-box">
+            <div class="phrase-head">
+                <span class="phrase-head-badge assistant"><svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg></span>
+                <div>
+                    <h4>Ghost Assistant</h4>
+                    <p class="sub">Type your 12 words and I'll rebuild your Ghost ID — right here on this phone.</p>
+                </div>
+            </div>
+            <textarea id="assistant-phrase-input" class="modal-input" rows="3" autocapitalize="off" autocomplete="off"
+                spellcheck="false" placeholder="apple river mountain silver eagle jungle bridge candle forest ocean tiger cloud"></textarea>
+            <p class="phrase-error hidden" id="assistant-error"></p>
+            <div id="assistant-preview" class="assistant-preview hidden">
+                <div class="assistant-preview-id" id="assistant-preview-id">Ghost-XXXXXX</div>
+                <p class="sub" id="assistant-hint"></p>
+            </div>
+            <button class="primary-btn" onclick="gmAssistantCheck()">Check phrase</button>
+            <button class="primary-btn assistant-restore hidden" id="assistant-restore-btn" onclick="gmAssistantRestore()">Restore this Ghost ID</button>
+            <button class="cancel-btn" style="width:100%;margin-top:10px;" onclick="gmCloseIdentityModals()">Cancel</button>
+            <p class="assistant-privacy"><svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13"><path d="M18 8h-1V6a5 5 0 0 0-10 0v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zM9 6a3 3 0 0 1 6 0v2H9V6zm3 12a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/></svg> All of this happens on your device. The words are never sent anywhere — there is no server to send them to.</p>
         </div>
     </div>
 
@@ -787,11 +941,23 @@
     </div>
 </div>
 
+<!-- BIP-39 wordlist (data only) then the identity module: the recovery
+     phrase and Ghost-ID derivation are pure local math, no network calls. -->
+<script src="bip39-wordlist.js"></script>
 <script src="script.js"></script>
+<script src="gm-identity.js"></script>
 <script>
-if ('serviceWorker' in navigator) {
+// The service worker only exists on a real http(s) origin. file:// (a plain
+// double-clicked file) and some native webview schemes cannot register one at
+// all, so registering there just produced a console error on every launch.
+// Also skipped inside the Android APK (user agent "GhostMeshAndroid", set by
+// MainActivity): the page is served locally by WebViewAssetLoader there, and a
+// cached copy would keep serving old code after an app update.
+if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)
+        && navigator.userAgent.indexOf('GhostMeshAndroid') === -1) {
     window.addEventListener('load', () => {
-        navigator.serviceWorker.register('service-worker.js').catch(() => {});
+        navigator.serviceWorker.register('./service-worker.js')
+            .catch(err => console.warn('Service worker registration skipped:', err && err.message));
     });
 }
 </script>

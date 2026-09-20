@@ -4,6 +4,7 @@
 :root {
     --bg: #0d0b14;
     --bg2: #13101e;
+    --card-bg: #1a1626; /* dropdown/menu surface (was only used with a fallback) */
     --surface: #1a1528;
     --surface2: #221c35;
     --accent: #9b59f7;
@@ -1107,7 +1108,9 @@ audio { max-width: min(220px, 70vw); margin-top: 6px; display: block; }
 /* ===== TOAST ===== */
 .toast {
     position: fixed;
-    bottom: 90px; left: 50%;
+    /* Clears the bottom pill nav and the home-indicator inset, so a toast and
+       the capsule never end up drawn on top of each other. */
+    bottom: calc(84px + env(safe-area-inset-bottom, 0px)); left: 50%;
     transform: translateX(-50%);
     background: var(--surface2);
     color: var(--text);
@@ -1255,7 +1258,7 @@ body.theme-whatsapp .msg-tick.read {
     position: relative;
     display: flex;
     border-bottom: 1px solid var(--border2);
-    background: var(--bg1);
+    background: var(--bg2);
     flex-shrink: 0;
 }
 .main-tab-btn {
@@ -1274,27 +1277,215 @@ body.theme-whatsapp .msg-tick.read {
     position: absolute;
     bottom: 0;
     left: 0;
-    width: 33.333%;
+    width: 50%; /* two tabs (Chats / WiFi) — JS keeps this in sync */
     height: 3px;
     background: var(--accent);
     border-radius: 3px 3px 0 0;
     transition: transform 0.25s ease;
 }
+/* Swipe physics: scroll-snap is deliberately OFF here — mandatory AND
+   proximity both let a fast flick skip every intermediate panel and land on
+   the last one, because a browser snap point always wins over momentum.
+   Snapping now happens in JS (initMainTabsScroller) once, after the gesture
+   and its momentum have stopped, and only ever to the NEAREST panel. */
 .main-tabs-scroller {
     flex: 1;
     display: flex;
     overflow-x: auto;
     overflow-y: hidden;
-    scroll-snap-type: x mandatory;
+    overscroll-behavior-x: contain;
     -webkit-overflow-scrolling: touch;
 }
 .main-tab-panel {
     flex: 0 0 100%;
     width: 100%;
-    scroll-snap-align: start;
+    padding-bottom: 6px;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
+}
+
+/* =====================================================================
+   POLISH PASS
+   Bottom floating pill nav + screen transitions + snappier touch and
+   scroll feedback. Additive only: nothing above is replaced, and every
+   colour comes from the existing theme variables, so all themes (including
+   the user-made ones) keep working untouched.
+   ===================================================================== */
+
+:root {
+    /* Room reserved at the bottom of the screens that show the pill nav:
+       capsule height + its float gap + a little breathing room. */
+    --gm-nav-h: 78px;
+    /* Snappy "out" curve for movement, calmer curve for state fades. */
+    --gm-ease: cubic-bezier(0.22, 1, 0.36, 1);
+    --gm-ease-in: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ---- Bottom floating pill nav --------------------------------------- */
+.gm-nav {
+    position: fixed;
+    left: 50%;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    transform: translateX(-50%);
+    z-index: 900;
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+    width: min(420px, calc(100% - 24px));
+    padding: 6px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5), 0 6px 14px rgba(0,0,0,0.35);
+    font-family: inherit;
+    animation: gmNavIn 0.32s var(--gm-ease) both;
+}
+/* .hidden already carries !important, so this is just documentation. */
+.gm-nav.hidden { display: none !important; }
+
+@keyframes gmNavIn {
+    from { opacity: 0; transform: translateX(-50%) translateY(16px); }
+    to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* Instagram-style highlight: one capsule that slides between the items.
+   JS sets its width + translateX from the active button's geometry. */
+.gm-nav-pill {
+    position: absolute;
+    left: 0;
+    top: 6px;
+    bottom: 6px;
+    width: 0;
+    opacity: 0;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    border: 1px solid var(--border);
+    pointer-events: none;
+    transition: transform 0.32s var(--gm-ease), width 0.32s var(--gm-ease),
+                opacity 0.18s linear;
+}
+
+.gm-nav-item {
+    position: relative;
+    z-index: 1;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 7px 2px 6px;
+    background: none;
+    border: none;
+    border-radius: 999px;
+    color: var(--text3);
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: color 0.2s var(--gm-ease);
+}
+.gm-nav-item svg {
+    width: 21px;
+    height: 21px;
+    display: block;
+    transition: transform 0.26s var(--gm-ease);
+}
+/* Instant press acknowledgement: no transition on purpose, so the scale
+   lands the same frame the finger does. */
+.gm-nav-item:active { transform: scale(0.94); }
+.gm-nav-item.active { color: var(--accent); }
+.gm-nav-item.active svg { transform: translateY(-1px) scale(1.08); }
+.gm-nav-label { line-height: 1; }
+
+/* The nav floats over the app, so the two screens that show it reserve room
+   for it — nothing important can end up stranded behind the capsule. */
+#chatlist-screen,
+#profile-screen {
+    padding-bottom: calc(var(--gm-nav-h) + env(safe-area-inset-bottom, 0px));
+}
+
+/* ---- Screen transitions --------------------------------------------- */
+/* The root screen cross-fades; pushed screens (chat, profile, themes) slide
+   in from the right, the Android convention. gmAnimateScreen() in script.js
+   adds these classes and removes them again so they can replay on re-entry. */
+.gm-screen-fade { animation: gmScreenFade 0.26s var(--gm-ease) both; }
+.gm-screen-push { animation: gmScreenPush 0.3s var(--gm-ease) both; }
+
+@keyframes gmScreenFade {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes gmScreenPush {
+    from { opacity: 0.45; transform: translateX(26px); }
+    to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ---- Touch + scroll snappiness -------------------------------------- */
+/* Native momentum for every list, and no rubber-band bleed between nested
+   scrollers (that bleed is what made the tab swipe feel like it "jumped"). */
+#chat-list-container,
+.main-tab-panel,
+.profile-content,
+.modal-box,
+#messages-container,
+.theme-grid,
+.reach-list,
+.nearby-list {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+}
+
+/* Press feedback was missing on a few controls; every tap should answer. */
+.cancel-btn:active,
+.confirm-btn:active,
+.back-btn:active,
+.save-btn:active,
+.action-modal-btn:active,
+.main-tab-btn:active {
+    transform: scale(0.96);
+}
+
+/* The top tab bar keeps its look but shares the pill nav's motion language,
+   so the two nav bars read as one system. */
+.main-tab-btn {
+    transition: color 0.2s var(--gm-ease), transform 0.12s var(--gm-ease-in);
+}
+.main-tab-indicator {
+    height: 3px;
+    border-radius: 999px 999px 0 0;
+    box-shadow: 0 0 10px var(--accent-glow);
+    transition: transform 0.32s var(--gm-ease);
+}
+
+/* ---- Consistency ---------------------------------------------------- */
+/* A soft edge under each header, so content scrolling beneath it reads as
+   "under" instead of as a hard cut. */
+.app-header { box-shadow: 0 6px 18px rgba(0,0,0,0.28); }
+
+/* One focus ring for the whole app (keyboard / desktop / TV remotes). */
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+button:focus:not(:focus-visible),
+input:focus:not(:focus-visible),
+textarea:focus:not(:focus-visible),
+select:focus:not(:focus-visible) {
+    outline: none;
+}
+
+/* Motion is decoration here — honour the OS setting. */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+        scroll-behavior: auto !important;
+    }
 }
 
 /* ===== GROUP CHAT: member picker ===== */
@@ -1635,16 +1826,18 @@ body.theme-whatsapp .msg-tick.read {
 /* ===================================================================
    CREDITS & PREMIUM
 =================================================================== */
+/* Compact credits widget: one slim row so it reads as a small widget in the
+   profile rather than a dominant block. */
 .credits-card {
-    background: var(--accent-soft);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 16px;
-    margin: 16px 0;
+    background: var(--bg2);
+    border: 1px solid var(--border2);
+    border-radius: 12px;
+    padding: 8px 10px;
+    margin: 10px 0;
 }
 .credits-row { display: flex; align-items: center; justify-content: space-between; }
-.credits-label { font-size: 12px; color: var(--text2); }
-.credits-amount { font-size: 26px; font-weight: 800; color: var(--accent); }
+.credits-label { font-size: 11px; color: var(--text2); }
+.credits-amount { font-size: 17px; font-weight: 800; color: var(--accent); line-height: 1; }
 .premium-badge-btn {
     background: linear-gradient(135deg, #f7b733, #fc4a1a);
     color: #fff; border: none; border-radius: 20px;
@@ -1825,3 +2018,290 @@ body.theme-whatsapp .msg-tick.read {
 .send-credit-confirm { display: flex; align-items: center; justify-content: center; gap: 6px; }
 
 .not-enough-credits-box { max-width: 320px; }
+
+/* ===== RADAR MAP MARKERS (divIcon — no image files required) ===== */
+.gm-map-pin {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid rgba(255, 255, 255, 0.85);
+    box-shadow: 0 0 0 6px var(--accent-soft), 0 4px 12px rgba(0, 0, 0, 0.45);
+    box-sizing: border-box;
+}
+.gm-map-pin span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #fff;
+}
+.leaflet-popup-content .map-connect-btn {
+    margin-top: 6px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+
+/* ===================================================================
+   COMPACT CREDITS WIDGET  (profile screen)
+=================================================================== */
+.credits-mini-row { display: flex; align-items: center; gap: 7px; }
+.credits-mini-icon {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; border-radius: 8px;
+    background: var(--accent-soft); color: var(--accent);
+    flex-shrink: 0;
+}
+.credits-mini-label { font-size: 11px; color: var(--text3); margin-right: auto; }
+.credits-mini-actions { display: flex; gap: 6px; }
+.credits-earn-icon {
+    flex: 0 0 auto; width: 28px; height: 28px; padding: 0;
+    border-radius: 8px;
+}
+.credits-card .premium-badge-btn {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 4px 9px; font-size: 11px;
+    border-radius: 20px;
+}
+.secondary-btn {
+    width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;
+    background: var(--bg2); color: var(--text);
+    border: 1px solid var(--border2); border-radius: 12px;
+    padding: 12px; font-size: 14px; font-weight: 600;
+    margin-top: 10px; cursor: pointer;
+}
+.secondary-btn:active { transform: scale(0.98); }
+.field-hint { font-size: 11px; color: var(--text3); margin: 6px 0 0; line-height: 1.4; }
+.ghost-assistant-link {
+    display: flex; align-items: center; justify-content: center; gap: 7px;
+    width: 100%; margin-top: 12px;
+    background: none; border: none; color: var(--accent);
+    font-size: 13px; font-weight: 600; cursor: pointer;
+    text-decoration: underline; text-underline-offset: 3px;
+}
+
+/* ===================================================================
+   PEER LISTS — Chats tab "Online Nearby" + WiFi tab "Ghosts You Can Reach"
+   Both are drawn by renderPeopleListInto(), so they stay identical.
+=================================================================== */
+.nearby-section {
+    flex: 0 0 auto;
+    max-height: 42%;
+    overflow-y: auto;
+    border-top: 1px solid var(--border2);
+    background: var(--bg);
+    transition: background 0.4s;
+}
+.nearby-section.flash { background: var(--accent-soft); }
+.nearby-head, .reach-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px 6px;
+    position: sticky; top: 0;
+    background: inherit;
+    z-index: 1;
+}
+.nearby-title, .reach-title {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 12px; font-weight: 700; letter-spacing: 0.03em;
+    text-transform: uppercase; color: var(--text2);
+}
+.nearby-pulse {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--success);
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.6);
+    animation: nearby-pulse 2s infinite;
+}
+@keyframes nearby-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(34,197,94,0.55); }
+    70%  { box-shadow: 0 0 0 7px rgba(34,197,94,0); }
+    100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
+}
+.nearby-count {
+    min-width: 22px; text-align: center;
+    font-size: 11px; font-weight: 700;
+    color: var(--accent); background: var(--accent-soft);
+    border-radius: 20px; padding: 2px 7px;
+}
+.nearby-list, .reach-list { padding: 0 8px 10px; }
+.nearby-list .online-user-item, .reach-list .online-user-item { margin-bottom: 6px; }
+.peer-empty {
+    font-size: 12px; color: var(--text3); line-height: 1.5;
+    padding: 8px 12px 14px; text-align: center;
+}
+.reach-section {
+    margin: 4px 12px 18px;
+    background: var(--bg2);
+    border: 1px solid var(--border2);
+    border-radius: 14px;
+    overflow: hidden;
+}
+.reach-section .reach-head { padding: 12px 14px 8px; }
+
+/* ===================================================================
+   PREMIUM MODAL — hero, SVG feature rows, tighter rhythm
+=================================================================== */
+.premium-modal-box { max-width: 350px; max-height: 88vh; overflow-y: auto; padding: 0; }
+.premium-modal-box > *:not(.premium-hero) { margin-left: 16px; margin-right: 16px; }
+.premium-hero {
+    position: relative;
+    padding: 22px 18px 18px;
+    text-align: center;
+    background:
+        radial-gradient(120% 100% at 50% 0%, rgba(155, 89, 247, 0.28), transparent 70%),
+        linear-gradient(160deg, var(--bg2), var(--surface));
+    border-bottom: 1px solid var(--border2);
+    margin-bottom: 14px;
+}
+.premium-hero-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 44px; height: 44px; border-radius: 14px;
+    background: linear-gradient(135deg, var(--accent), #6d28d9);
+    color: #fff; margin-bottom: 10px;
+    box-shadow: 0 6px 18px rgba(155, 89, 247, 0.35);
+}
+.premium-hero h3 { margin: 0 0 4px; font-size: 17px; font-weight: 800; }
+.premium-hero-sub { margin: 0; font-size: 12px; color: var(--text2); line-height: 1.45; }
+.premium-credits-row {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    margin: 0 16px 14px; padding: 7px 10px;
+    background: var(--bg2); border: 1px solid var(--border2); border-radius: 10px;
+}
+.premium-credits-row #premium-modal-credits { font-size: 15px; font-weight: 800; color: var(--accent); }
+.premium-feature-list { list-style: none; padding: 0; margin: 0 16px 16px; }
+.premium-feature-list li {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--border2);
+}
+.premium-feature-list li:last-child { border-bottom: none; }
+.pf-icon {
+    flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; border-radius: 9px;
+    background: var(--accent-soft); color: var(--accent);
+    margin-top: 1px;
+}
+.pf-text { display: flex; flex-direction: column; gap: 1px; }
+.pf-title { font-size: 13px; font-weight: 600; line-height: 1.25; }
+.pf-sub { font-size: 11px; color: var(--text3); line-height: 1.3; }
+.premium-note {
+    font-size: 11px; color: var(--text3); text-align: center;
+    line-height: 1.5; margin: 12px 16px 0;
+}
+.premium-earn-title {
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--text3); text-align: center; margin: 0 0 10px;
+}
+.premium-plans { display: flex; gap: 8px; margin: 16px; }
+.premium-earn-section { margin: 0 16px; padding-top: 14px; border-top: 1px solid var(--border2); }
+.premium-modal-box .credits-earn-btn { text-decoration: none; }
+.premium-modal-box .credits-earn-row { margin-top: 0; }
+
+/* ===================================================================
+   IDENTITY: recovery phrase + Ghost Assistant
+=================================================================== */
+.modal-icon-badge {
+    display: flex; align-items: center; justify-content: center;
+    width: 46px; height: 46px; margin: 0 auto 8px;
+    border-radius: 14px;
+    background: var(--accent-soft); color: var(--accent);
+}
+.modal-icon-badge.small { width: 38px; height: 38px; margin: 0; border-radius: 12px; }
+.phrase-modal-box, .assistant-box { max-width: 360px; max-height: 90vh; overflow-y: auto; }
+.phrase-head { display: flex; align-items: center; gap: 11px; margin-bottom: 14px; }
+.phrase-head h4 { margin: 0 0 2px; font-size: 16px; }
+.phrase-head .sub { margin: 0; font-size: 11.5px; line-height: 1.4; }
+.phrase-head-badge {
+    flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 38px; height: 38px; border-radius: 12px;
+    background: var(--accent-soft); color: var(--accent);
+}
+.phrase-head-badge.assistant { background: linear-gradient(135deg, var(--accent), #6d28d9); color: #fff; }
+.phrase-step.hidden { display: none; }
+.phrase-warning {
+    font-size: 11.5px; line-height: 1.55; color: var(--text2);
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.28);
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin: 0 0 12px;
+}
+.phrase-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+    margin-bottom: 12px;
+}
+.phrase-chip {
+    display: flex; align-items: center; gap: 7px;
+    background: var(--bg2); border: 1px solid var(--border2);
+    border-radius: 9px; padding: 7px 9px;
+    min-width: 0;
+}
+.phrase-chip-num {
+    font-size: 10px; font-weight: 700; color: var(--text3);
+    min-width: 15px; text-align: right;
+}
+.phrase-chip-word {
+    font-size: 12.5px; font-weight: 600; color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    overflow: hidden; text-overflow: ellipsis;
+}
+.phrase-check {
+    display: flex; align-items: flex-start; gap: 9px;
+    font-size: 12px; line-height: 1.45; color: var(--text2);
+    margin: 4px 0 12px; cursor: pointer;
+}
+.phrase-check input { margin-top: 2px; width: 16px; height: 16px; accent-color: var(--accent); flex-shrink: 0; }
+.phrase-copy-btn { width: 100%; margin-top: 8px; text-decoration: none; }
+.phrase-verify-fields { display: flex; flex-direction: column; gap: 9px; margin-bottom: 12px; }
+.phrase-verify-field { display: flex; flex-direction: column; gap: 4px; }
+.phrase-verify-field span { font-size: 11px; font-weight: 700; color: var(--text2); }
+.phrase-verify-field input {
+    background: var(--bg2); border: 1px solid var(--border2); border-radius: 9px;
+    color: var(--text); padding: 10px 12px; font-size: 14px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.phrase-back-btn { width: 100%; margin-top: 8px; }
+.phrase-error {
+    font-size: 11.5px; line-height: 1.45; color: var(--danger);
+    margin: 0 0 10px;
+}
+.phrase-error.hidden { display: none; }
+.phrase-lost-note {
+    font-size: 10.5px; color: var(--text3); text-align: center;
+    line-height: 1.5; margin: 12px 0 0;
+}
+.assistant-box textarea { width: 100%; resize: vertical; font-size: 14px; line-height: 1.6; }
+.assistant-preview {
+    text-align: center;
+    background: var(--accent-soft);
+    border: 1px solid var(--border2);
+    border-radius: 12px;
+    padding: 12px;
+    margin-bottom: 12px;
+}
+.assistant-preview.hidden { display: none; }
+.assistant-preview-id {
+    font-size: 19px; font-weight: 800; color: var(--accent);
+    letter-spacing: 0.02em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.assistant-preview .sub { font-size: 11px; margin: 4px 0 0; line-height: 1.45; }
+.assistant-restore { background: var(--success); }
+.assistant-restore.hidden { display: none; }
+.assistant-privacy {
+    display: flex; align-items: flex-start; gap: 6px;
+    font-size: 10.5px; color: var(--text3); line-height: 1.5;
+    margin: 12px 0 0;
+}

@@ -94,13 +94,43 @@ window.addEventListener("unhandledrejection", event => {
     event.preventDefault();
 });
 
+// ===== MEDIA CAPTURE (safe wrapper) =====
+// navigator.mediaDevices does not exist outside a secure context (file://,
+// and some Android WebView wrappers). Touching it directly throws a
+// TypeError *before* any .catch() can run, so every camera/mic entry point
+// goes through this helper instead and gets a clear, actionable message.
+function gmGetUserMedia(constraints) {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        const err = new Error("Camera/Mic are blocked outside a secure context");
+        err.name = "InsecureContextError";
+        err.insecureContext = true;
+        showToast("Camera/Mic need https:// or a local server — a plain file:// won't work");
+        return Promise.reject(err);
+    }
+    return navigator.mediaDevices.getUserMedia(constraints);
+}
+function isInsecureMediaError(e) { return !!(e && e.insecureContext); }
+
 // ===== INIT =====
+function gmEnsureIdentityThen(done) {
+    // GMIdentity lives in gm-identity.js. If it failed to load we still let the
+    // app run — but say so instead of pretending recovery exists.
+    if (typeof GMIdentity === "undefined") {
+        console.error("gm-identity.js did not load — identity recovery unavailable");
+        if (typeof done === "function") done();
+        return;
+    }
+    GMIdentity.ensureIdentityThen(done);
+}
+
 function initApp() {
     const pin = safeStorage.get("gm_pin");
     if (pin) { renderPinDots(); showEl("lock-screen"); }
     else {
         const phone = safeStorage.get("gm_phone");
-        if (phone) executeLogin(phone, safeStorage.get("gm_name")||"");
+        // A brand-new install has no seed yet: create one and make the person
+        // confirm their 12-word phrase BEFORE the app opens (no skip).
+        if (phone) gmEnsureIdentityThen(() => executeLogin(phone, safeStorage.get("gm_name")||""));
         else showEl("login-screen");
     }
     loadTheme();
@@ -117,8 +147,9 @@ function requestPermissions() {
 // Location: requested on map open
 // Notifications: requested below
 function requestNotificationPermission() {
-    if ("Notification" in window && Notification.permission === "default") {
-        Notification.requestPermission();
+    if (typeof Notification === "undefined") return;
+    if (Notification.permission === "default") {
+        try { Notification.requestPermission(); } catch(e) {}
     }
 }
 
@@ -152,7 +183,7 @@ function checkPin() {
         updatePinDots();
         hideEl("lock-screen");
         const phone = safeStorage.get("gm_phone");
-        if (phone) executeLogin(phone, safeStorage.get("gm_name")||"");
+        if (phone) gmEnsureIdentityThen(() => executeLogin(phone, safeStorage.get("gm_name")||""));
         else showEl("login-screen");
     } else {
         pinBuffer = "";
@@ -164,18 +195,27 @@ function checkPin() {
 // ===== LOGIN =====
 function verifyAndLogin() {
     const name = document.getElementById("user-display-name").value.trim();
-    const phone = document.getElementById("phone-number").value.trim();
+    const phoneEl = document.getElementById("phone-number");
+    const phone = phoneEl ? phoneEl.value.trim() : "";
     const pin = document.getElementById("set-pin-input").value.trim();
-    if (!phone || phone.length < 6) { showToast("Enter a valid phone number"); return; }
+    if (!name) { showToast("Enter the name your contacts will see"); return; }
+    // The phone number is optional and is NEVER used to build the Ghost ID —
+    // that comes from the random seed, so nothing personal is guessable.
+    if (phone && phone.replace(/\D/g, "").length < 6) { showToast("That phone number looks incomplete"); return; }
     if (pin.length === 4) safeStorage.set("gm_pin", pin);
-    safeStorage.set("gm_phone", phone);
-    safeStorage.set("gm_name", name || "Ghost User");
-    executeLogin(phone, name || "Ghost User");
+    if (phone) safeStorage.set("gm_phone", phone); else safeStorage.del("gm_phone");
+    safeStorage.set("gm_name", name);
+    // Creates the seed on first run and shows the mandatory recovery phrase.
+    gmEnsureIdentityThen(() => executeLogin(phone, name));
 }
 
 function executeLogin(phone, name) {
-    userPhoneNumber = phone;
-    userGhostID = "Ghost-" + phone.slice(-4);
+    userPhoneNumber = phone || "";
+    // Ghost ID comes from the local seed (GMIdentity), never from the phone
+    // number — so it is random, unguessable, and recoverable from the phrase.
+    const identity = (typeof GMIdentity !== "undefined") ? GMIdentity.current() : null;
+    userGhostID = identity ? identity.ghostId : ("Ghost-" + Math.floor(100000 + Math.random() * 899999));
+    if (!identity) console.warn("No seed on this device — using a temporary Ghost ID");
     userDisplayName = name || safeStorage.get("gm_name") || "Ghost User";
 
     // One-time welcome bonus: brand-new Ghost ID (no credits key ever set
@@ -191,6 +231,7 @@ function executeLogin(phone, name) {
     showEl("app-shell");
     showScreen("chatlist-screen");
     initMainTabsScroller();
+    gmInitBottomNav();
 
     updateHeaderDisplay();
     updateProfileScreen();
@@ -201,6 +242,7 @@ function executeLogin(phone, name) {
     loadTheme();
     requestNotificationPermission();
     startOnlinePresenceBroadcast();
+    gmStartNativeDiscovery();
 
     // FIX: app must be fully usable with zero internet. If there's no
     // connection, Online mode (PeerJS cloud) simply can't reach its
@@ -219,7 +261,10 @@ window.addEventListener("online", () => showToast("Back online"));
 window.addEventListener("offline", () => showToast("No internet — WiFi tab still works fully offline"));
 
 function updateHeaderDisplay() {
-    document.getElementById("my-ghost-id-label").innerText = userGhostID;
+    // The Ghost ID comes from the local seed, so it is valid before any network
+    // is reachable — show it straight away instead of "Connecting...".
+    const label = document.getElementById("my-ghost-id-label");
+    if (label) label.innerText = userGhostID;
     document.getElementById("my-name-display").innerText = userDisplayName;
     setAvatarDisplay("my-avatar-display", userCurrentDP);
 }
@@ -230,7 +275,7 @@ function updateProfileScreen() {
     const gid = document.getElementById("profile-ghost-id");
     if (gid) gid.innerText = userGhostID;
     const ph = document.getElementById("profile-phone");
-    if (ph) ph.innerText = userPhoneNumber;
+    if (ph) ph.innerText = userPhoneNumber || "not set (optional)";
     setAvatarDisplay("profile-avatar-big", userCurrentDP);
     renderCreditsUI();
 }
@@ -247,56 +292,267 @@ function setAvatarDisplay(elId, dpData) {
 
 function logoutApp() {
     closeAllMenus();
-    if (!confirm("Logout from Ghost Mesh?")) return;
+    const hasSeed = (typeof GMIdentity !== "undefined") && GMIdentity.exists();
+    const msg = hasSeed
+        ? "Log out of Ghost Mesh?\n\nYour Ghost ID and its 12-word recovery phrase stay on this device, so you can log back in without them."
+        : "Log out of Ghost Mesh?";
+    if (!confirm(msg)) return;
+    // The seed is the identity — logging out must NOT throw it away. Only the
+    // device-local profile (name/phone/PIN) is cleared.
+    gmStopNativeDiscovery();
     safeStorage.del("gm_phone"); safeStorage.del("gm_pin"); safeStorage.del("gm_name");
     location.reload();
 }
 
 // ===== SCREENS =====
-function showScreen(id) {
+// Pushed screens (chat / profile / themes) slide in from the right — the
+// Android convention — while the root screen cross-fades. Both animations are
+// pure CSS (see the POLISH PASS block in style.css) and are skipped entirely
+// when the OS asks for reduced motion.
+const GM_PUSH_SCREENS = { "chat-screen": true, "profile-screen": true, "theme-screen": true };
+const GM_SCREEN_ANIM_MS = 340;
+// BOTH the element and its class are remembered: navigating again before the
+// timer fires used to orphan the class on the previous screen (leaving it stuck
+// with a finished animation and unable to replay one later).
+let gmScreenAnimEl = null;
+let gmScreenAnimClass = null;
+let gmScreenAnimTimer = null;
+
+function gmPrefersReducedMotion() {
+    try {
+        return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    } catch (e) { return false; }
+}
+
+function gmAnimateScreen(el, id) {
+    if (!el) return;
+    clearTimeout(gmScreenAnimTimer);
+    // Always clean up the previous screen first, whether or not its timer ran.
+    if (gmScreenAnimEl && gmScreenAnimClass) gmScreenAnimEl.classList.remove(gmScreenAnimClass);
+    gmScreenAnimEl = null;
+    gmScreenAnimClass = null;
+    if (gmPrefersReducedMotion()) return;
+    const cls = GM_PUSH_SCREENS[id] ? "gm-screen-push" : "gm-screen-fade";
+    // A class that is already on the element cannot replay its keyframes, so
+    // force one reflow first — that is what makes re-entering a screen animate.
+    void el.offsetWidth;
+    el.classList.add(cls);
+    gmScreenAnimEl = el;
+    gmScreenAnimClass = cls;
+    gmScreenAnimTimer = setTimeout(() => {
+        el.classList.remove(cls);
+        if (gmScreenAnimEl === el) { gmScreenAnimEl = null; gmScreenAnimClass = null; }
+    }, GM_SCREEN_ANIM_MS);
+}
+
+// tabIndex lets a caller open the chat list straight onto a panel, so the pill
+// nav can go to WiFi in one step instead of scrolling to Chats and back.
+function showScreen(id, tabIndex) {
     document.querySelectorAll(".app-screen").forEach(s => s.classList.add("hidden"));
     const t = document.getElementById(id);
     if (t) t.classList.remove("hidden");
-    if (id === "chatlist-screen") scrollToMainTab(0);
+    gmAnimateScreen(t, id);
+    gmSyncBottomNav(id);
+    if (id === "chatlist-screen") scrollToMainTab(tabIndex === undefined ? 0 : tabIndex);
 }
 function showEl(id) { const e = document.getElementById(id); if(e) e.classList.remove("hidden"); }
 function hideEl(id) { const e = document.getElementById(id); if(e) e.classList.add("hidden"); }
 
-// ===== WHATSAPP-STYLE MAIN TABS (Chats / WiFi / Online) =====
+// Scrolls a container smoothly, falling back to an instant jump where
+// Element.scrollTo({behavior}) is not implemented (a few older WebViews).
+function gmScrollContainerTo(el, left) {
+    if (!el) return;
+    if (typeof el.scrollTo === "function") {
+        try {
+            el.scrollTo({ left, behavior: "smooth" });
+            return;
+        } catch (e) { /* fall through to the plain assignment below */ }
+    }
+    el.scrollLeft = left;
+}
+
+// ===== MAIN TABS (Chats / WiFi) =====
+// The separate "Online" tab is gone: online peers now live in the Chats tab's
+// "Online Nearby" list and in the WiFi tab's "Ghosts You Can Reach" list, both
+// rendered from the same shared function so they can never disagree.
+const GM_TABS = ["Chats", "WiFi"];
+
 function scrollToMainTab(index) {
     const scroller = document.getElementById("main-tabs-scroller");
+    const clamped = Math.max(0, Math.min(GM_TABS.length - 1, index));
     if (!scroller) return;
-    scroller.scrollTo({ left: index * scroller.clientWidth, behavior: "smooth" });
-    setActiveMainTab(index);
+    // An explicit tab tap is the only time we deliberately align a panel:
+    // a gentle smooth scroll, never a hard jump to the last page.
+    gmScrollContainerTo(scroller, clamped * scroller.clientWidth);
+    setActiveMainTab(clamped);
 }
+
 function setActiveMainTab(index) {
-    for (let i = 0; i < 3; i++) {
-        document.getElementById("main-tab-btn-" + i)?.classList.toggle("active", i === index);
-    }
+    const clamped = Math.max(0, Math.min(GM_TABS.length - 1, index));
+    GM_TABS.forEach((_, i) => {
+        document.getElementById("main-tab-btn-" + i)?.classList.toggle("active", i === clamped);
+    });
     const indicator = document.getElementById("main-tab-indicator");
-    if (indicator) indicator.style.transform = `translateX(${index * 100}%)`;
-    if (index === 2) { refreshOnlineUsers(); } // Online tab needs a fresh peer list
+    if (indicator) {
+        indicator.style.width = (100 / GM_TABS.length) + "%";
+        indicator.style.transform = `translateX(${clamped * 100}%)`;
+    }
+    // Keep the bottom pill nav's highlight in step with the tab bar. This runs
+    // on every scroll tick, so gmSetBottomNavActive() bails out early when the
+    // answer has not changed instead of touching the DOM each time.
+    gmSetBottomNavActive(clamped === 1 ? "wifi" : "chats", true);
+    // Both tabs show reachable peers, so refresh whichever is on screen.
+    renderPeerLists();
 }
+
+// Swipe physics: the panels are no longer scroll-snap at all (see style.css).
+// A browser snap point is exactly what let a fast flick skip every panel and
+// land on the last one. Snapping now happens here, once, after the gesture and
+// its momentum have actually stopped — and only ever to the NEAREST panel, so
+// a quick flick still travels through the panels naturally instead of jumping.
 function initMainTabsScroller() {
     const scroller = document.getElementById("main-tabs-scroller");
     if (!scroller) return;
-    let scrollTimeout;
+    let settleTimer = null;
+    let dragging = false;
+
     scroller.addEventListener("scroll", () => {
-        clearTimeout(scrollTimeout);
-        scrollTimeout = setTimeout(() => {
-            const index = Math.round(scroller.scrollLeft / scroller.clientWidth);
-            setActiveMainTab(index);
-        }, 80);
-    });
+        // Keep the tab highlight in sync while the finger is still moving...
+        const active = Math.round(scroller.scrollLeft / (scroller.clientWidth || 1));
+        if (active >= 0 && active < GM_TABS.length) setActiveMainTab(active);
+        // ...and settle only after the scrolling has genuinely stopped.
+        scheduleSettle();
+    }, { passive: true });
+
+    function scheduleSettle() {
+        clearTimeout(settleTimer);
+        settleTimer = setTimeout(settle, 110);
+    }
+
+    function settle() {
+        if (dragging || !scroller.isConnected) return;
+        const width = scroller.clientWidth || 1;
+        const nearest = Math.max(0, Math.min(GM_TABS.length - 1, Math.round(scroller.scrollLeft / width)));
+        if (Math.abs(scroller.scrollLeft - nearest * width) < 1.5) return; // already aligned
+        gmScrollContainerTo(scroller, nearest * width);
+        setActiveMainTab(nearest);
+    }
+
+    // A fresh touch always wins over a pending settle, so a panel is never
+    // yanked out from under a finger that just started dragging.
+    scroller.addEventListener("touchstart", () => {
+        dragging = true;
+        clearTimeout(settleTimer);
+    }, { passive: true });
+    ["touchend", "touchcancel"].forEach(evt => scroller.addEventListener(evt, () => {
+        dragging = false;
+        scheduleSettle();
+    }, { passive: true }));
+    scroller.addEventListener("mousedown", () => { dragging = true; clearTimeout(settleTimer); });
+    window.addEventListener("mouseup", () => { if (dragging) { dragging = false; scheduleSettle(); } });
+}
+
+// ===== BOTTOM FLOATING PILL NAV =====
+// The swipeable tab bar at the top is untouched — this is a second, faster way
+// to reach the same places (plus "New connection" and the profile). Both stay
+// in agreement because the tab bar drives the highlight through
+// setActiveMainTab(), and this drives the tab bar through showScreen().
+const GM_NAV_SCREENS = { "chatlist-screen": true, "profile-screen": true };
+let gmNavActiveKey = "";
+let gmNavReady = false;
+
+function gmInitBottomNav() {
+    const nav = document.getElementById("gm-bottom-nav");
+    if (!nav) return;
+    if (gmNavReady) return;                 // listeners are registered once
+    gmNavReady = true;
+    // Rotation, the on-screen keyboard and a window resize all change the
+    // geometry, so the capsule is re-measured once the layout settles.
+    window.addEventListener("resize", () => gmMoveNavPill(true), { passive: true });
+    window.addEventListener("orientationchange", () => setTimeout(() => gmMoveNavPill(true), 260));
+    gmSetBottomNavActive(gmNavActiveKey || "chats", false);
+}
+
+function gmSetBottomNavVisible(visible) {
+    const nav = document.getElementById("gm-bottom-nav");
+    if (nav) nav.classList.toggle("hidden", !visible);
+}
+
+// Runs on every screen change, so the nav can never sit on top of a pushed
+// screen (chat, themes) where it would only be in the way.
+function gmSyncBottomNav(screenId) {
+    const visible = GM_NAV_SCREENS[screenId] === true;
+    gmSetBottomNavVisible(visible);
+    if (!visible) return;
+    if (screenId === "profile-screen") gmSetBottomNavActive("profile", true);
+    gmMoveNavPill(true);
+}
+
+function gmSetBottomNavActive(key, animate) {
+    const nav = document.getElementById("gm-bottom-nav");
+    // Hot path: called on every scroll tick, so leave the DOM alone when the
+    // highlight is already on the right item.
+    if (key === gmNavActiveKey && nav && !nav.classList.contains("hidden")) return;
+    gmNavActiveKey = key;
+    if (!nav) return;
+    const items = nav.querySelectorAll(".gm-nav-item");
+    for (let i = 0; i < items.length; i++) {
+        const on = items[i].getAttribute("data-nav") === key;
+        items[i].classList.toggle("active", on);
+        if (on) items[i].setAttribute("aria-current", "page");
+        else items[i].removeAttribute("aria-current");
+    }
+    gmMoveNavPill(animate);
+}
+
+// Slides the highlight capsule onto the active item. The geometry is measured
+// from the live DOM instead of being hard-coded, so it stays correct on every
+// screen size, and it is themed (accent-tinted) rather than fixed-coloured.
+function gmMoveNavPill(animate) {
+    const nav = document.getElementById("gm-bottom-nav");
+    const pill = document.getElementById("gm-nav-pill");
+    if (!nav || !pill || !gmNavActiveKey) return;
+    const btn = nav.querySelector('.gm-nav-item[data-nav="' + gmNavActiveKey + '"]');
+    if (!btn) return;
+    const btnRect = btn.getBoundingClientRect();
+    if (!btnRect.width) return;             // nav is hidden / not laid out yet
+    const navRect = nav.getBoundingClientRect();
+    if (animate === false || pill.style.opacity !== "1") {
+        // First paint (or an explicitly instant move): place it directly
+        // instead of animating in from zero width.
+        pill.style.transition = "none";
+        requestAnimationFrame(() => { pill.style.transition = ""; });
+    }
+    // An absolutely positioned box is offset from its containing block's
+    // padding box, so the nav's own border width has to come off the delta.
+    const border = parseFloat(getComputedStyle(nav).borderLeftWidth) || 0;
+    pill.style.width = btnRect.width + "px";
+    pill.style.transform = "translateX(" + (btnRect.left - navRect.left - border) + "px)";
+    pill.style.opacity = "1";
+}
+
+// Single entry point for every nav item, so the highlight and the destination
+// can never drift apart (and the markup stays free of class juggling).
+function gmNavGo(key) {
+    closeAllMenus();
+    if (key === "profile") { openProfile(); return; }
+    if (key === "connect") { openNewConnect(); return; }
+    showScreen("chatlist-screen", key === "wifi" ? 1 : 0);
 }
 
 function openProfile() { closeAllMenus(); updateProfileScreen(); showScreen("profile-screen"); }
 function closeProfile() { showScreen("chatlist-screen"); }
 function openThemePicker() { closeAllMenus(); buildThemeGrid(); showScreen("theme-screen"); }
 function openOnlineUsers() {
+    // "Nearby Ghosts" now lives inside the Chats tab — no third tab to switch to.
     closeAllMenus();
     showScreen("chatlist-screen");
-    scrollToMainTab(2);
+    scrollToMainTab(0);
+    const section = document.getElementById("nearby-section");
+    if (section) {
+        section.classList.add("flash");
+        setTimeout(() => section.classList.remove("flash"), 900);
+    }
 }
 // ===== LOBBY DISCOVERY =====
 // No dedicated backend: PeerJS's own free cloud broker (the same one myPeerInstance
@@ -607,7 +863,45 @@ function stopFishAnimation() {
     fishes = [];
 }
 
+// ===== NATIVE MESH (BLE + Wi-Fi Direct, Android shell only) =====
+// Inside the APK, window.GhostNative is injected by MainActivity; in a plain
+// browser it does not exist and these calls quietly do nothing, so the web app
+// keeps working exactly as before on the web.
+function gmNativeMeshAvailable() {
+    return !!(window.GhostNative && typeof window.GhostNative.startDiscovery === "function");
+}
+
+function gmStartNativeDiscovery() {
+    if (!gmNativeMeshAvailable()) return;
+    try {
+        if (typeof window.GhostNative.isSupported === "function" && !window.GhostNative.isSupported()) return;
+        if (typeof window.GhostNative.setGhostId === "function") window.GhostNative.setGhostId(userGhostID);
+        if (typeof window.GhostNative.setDisplayName === "function") window.GhostNative.setDisplayName(userDisplayName);
+        window.GhostNative.startDiscovery();
+    } catch (e) {
+        console.warn("Native mesh discovery unavailable:", e);
+    }
+}
+
+function gmStopNativeDiscovery() {
+    if (!gmNativeMeshAvailable()) return;
+    try {
+        window.GhostNative.stopDiscovery();
+    } catch (e) {
+        /* nothing to do — the browser/older shell has no native layer */
+    }
+}
+
+// Status line pushed by the native layer (permission denied, scan started …).
+window.gmApplyNativeStatus = function (message) {
+    if (message) showToast(message);
+};
+
 // ===== MESH NETWORK =====
+// How many times the broker reported our Ghost ID as taken (see the error
+// handler below) — used to pick a deterministic fallback suffix.
+let peerIdRetries = 0;
+
 function initMesh() {
     try {
         myPeerInstance = new Peer(userGhostID, {
@@ -634,13 +928,25 @@ function initMesh() {
         myPeerInstance.on('call', call => handleIncomingCall(call));
         myPeerInstance.on('error', err => {
             if (err.type === 'unavailable-id') {
-                userGhostID = "Ghost-" + Math.floor(1000 + Math.random() * 9000);
-                document.getElementById("my-ghost-id-label").innerText = userGhostID;
-                initMesh();
+                // A Ghost ID is now derived from the recovery seed, so it must
+                // NOT be replaced with a random one (that would silently break
+                // the promise that the phrase restores this identity). Retry the
+                // same id a few times — broker registrations expire — and only
+                // then register a deterministic suffixed variant, keeping the
+                // canonical id for display, chat keys and QR pairing.
+                peerIdRetries++;
+                if (peerIdRetries <= 3) {
+                    setTimeout(() => initMesh(), peerIdRetries * 1500);
+                } else {
+                    const identity = (typeof GMIdentity !== "undefined") ? GMIdentity.current() : null;
+                    if (identity) userGhostID = identity.ghostId + "-" + peerIdRetries;
+                    updateHeaderDisplay();
+                    initMesh();
+                }
             } else if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error' || !navigator.onLine) {
                 // Online (PeerJS cloud) signaling couldn't be reached — normal
                 // when offline. Offline WiFi/QR mode is unaffected by this.
-                document.getElementById("my-ghost-id-label").innerText = "Offline (use WiFi tab)";
+                document.getElementById("my-ghost-id-label").innerText = userGhostID + " · offline (use WiFi tab)";
             }
         });
     } catch(e) { console.error(e); }
@@ -838,10 +1144,30 @@ function setupConn(conn) {
 
             // ----- Offline (QR/WiFi) call signaling — no server involved,
             // this all rides over the already-open offline data channel -----
-            case "voip-offer":
-                pendingIncomingCallEvent = { offline: true, peerId: conn.peer, sdp: data.sdp, callType: data.callType };
+            case "voip-offer": {
+                // A malformed/stale offer used to blow up the whole message
+                // handler (caught below) and could leave the caller ringing
+                // forever — answer it with an explicit end instead.
+                if (!data.sdp || !data.sdp.type) {
+                    sendToPeer(conn.peer, { type: "voip-end" });
+                    showToast("Ignored a broken call offer");
+                    break;
+                }
+                const busy = !!(pendingIncomingCallEvent || activeP2PCallInstance || activeOfflineCallPeer);
+                if (busy) {
+                    sendToPeer(conn.peer, { type: "voip-end" });
+                    showToast("Already on a call — rejected " + conn.peer);
+                    break;
+                }
+                if (!offlinePeerConnections[conn.peer]) {
+                    sendToPeer(conn.peer, { type: "voip-end" });
+                    showToast("Call ignored — connection is gone");
+                    break;
+                }
+                pendingIncomingCallEvent = { offline: true, peerId: conn.peer, sdp: data.sdp, callType: data.callType, open: true };
                 showIncomingCallUI(conn.peer, data.callType);
                 break;
+            }
 
             case "voip-answer":
                 (async () => {
@@ -905,54 +1231,110 @@ function updateOnlineUsers(peerId, displayName, isOnline) {
     renderOnlineUsers();
 }
 
-function renderOnlineUsers() {
-    const list = document.getElementById("online-users-list");
-    if (!list) return;
-    // Merge three sources: people already chatted with (onlineUsers), people
-    // freshly seen on the lobby broker (discoveredPeers), and current live
-    // connections — so anyone with the app open right now is visible, not
-    // just people we already know.
-    const allIds = new Set([
+// Every place that needs "who can I reach" data: connected peers, peers seen
+// on the lobby broker, and — once the native Android build is running — peers
+// discovered over BLE/Wi-Fi Direct (gmNativePeers, fed by the JS bridge).
+function gmReachablePeers() {
+    const ids = new Set([
         ...Object.keys(onlineUsers),
         ...Object.keys(discoveredPeers),
-        ...activeConnections.map(c => c.peer)
+        ...activeConnections.map(c => c.peer),
+        ...Object.keys(window.gmNativePeers || {})
     ]);
-    allIds.delete(userGhostID);
-    const peers = Array.from(allIds);
-    if (peers.length === 0) {
-        list.innerHTML = '<div class="system-msg" style="margin-top:30px;">No users online nearby.<br>Use "New Chat" or "Connect via WiFi" to find someone.</div>';
-        return;
+    ids.delete(userGhostID);
+    return Array.from(ids);
+}
+
+// Single shared renderer: the Chats tab's "Online Nearby" list and the WiFi
+// tab's "Ghosts You Can Reach" list are both drawn by this, so they always
+// show the same peers and the same state.
+function renderPeopleListInto(containerId, peers) {
+    const list = document.getElementById(containerId);
+    if (!list) return 0;
+    if (!peers.length) {
+        list.innerHTML = '<div class="peer-empty">Nobody reachable yet — open WiFi tab to pair with a nearby Ghost.</div>';
+        return 0;
     }
     list.innerHTML = "";
     peers.forEach(peerId => {
         const alreadyConnected = activeConnections.some(c => c.peer === peerId && c.open);
         const known = onlineUsers[peerId];
-        const isFreshDiscovery = !known && discoveredPeers[peerId];
-        const displayName = known ? known.displayName : peerId;
+        const native = (window.gmNativePeers || {})[peerId];
+        const isFreshDiscovery = (!known && !!discoveredPeers[peerId]) || !!native;
+        const displayName = known ? known.displayName : (native && native.name ? native.name : peerId);
+        let transport = "";
+        if (native) transport = native.transport === "wifi-direct" ? " · Wi-Fi Direct" : " · Bluetooth";
+        else if (isFreshDiscovery) transport = " · online now";
+        else if (!alreadyConnected) transport = " · offline";
+
         const item = document.createElement("div");
         item.className = "online-user-item";
-        let statusLabel, btnHtml;
+        let btnHtml;
         if (alreadyConnected) {
-            statusLabel = "";
             btnHtml = `<button class="online-user-connect" style="background:var(--success);" onclick="openChat('${peerId}')">Open Chat</button>`;
-        } else if (isFreshDiscovery) {
-            statusLabel = " · online now";
-            btnHtml = `<button class="online-user-connect" onclick="connectToPeer('${peerId}');showToast('Connecting...')">Connect</button>`;
+        } else if (native) {
+            btnHtml = `<button class="online-user-connect" onclick="connectViaNativeTransport('${peerId}')">Connect</button>`;
         } else {
-            statusLabel = " · offline";
-            btnHtml = `<button class="online-user-connect" onclick="connectToPeer('${peerId}');showToast('Connecting...')">Reconnect</button>`;
+            btnHtml = `<button class="online-user-connect" onclick="connectToPeer('${peerId}');showToast('Connecting...')">${isFreshDiscovery ? "Connect" : "Reconnect"}</button>`;
         }
         item.innerHTML = `
             <div class="online-user-dot" style="${alreadyConnected || isFreshDiscovery ? '' : 'background:var(--text3);'}"></div>
-            <div class="online-user-name">${displayName}<br><span style="font-size:11px;color:var(--text3);">${peerId}${statusLabel}</span></div>
+            <div class="online-user-name">${displayName}<br><span style="font-size:11px;color:var(--text3);">${peerId}${transport}</span></div>
             ${btnHtml}
         `;
         list.appendChild(item);
     });
+    return peers.length;
+}
+
+// Draws BOTH lists and updates their counters.
+function renderPeerLists() {
+    const peers = gmReachablePeers();
+    renderPeopleListInto("nearby-ghosts-list", peers);
+    renderPeopleListInto("wifi-reach-list", peers);
+    const n = peers.length;
+    const a = document.getElementById("nearby-count");
+    const b = document.getElementById("wifi-reach-count");
+    if (a) a.innerText = n;
+    if (b) b.innerText = n;
+    return n;
+}
+
+function renderOnlineUsers() {
+    return renderPeerLists();
 }
 
 // ===== CONNECT =====
 function openNewConnect() { closeAllMenus(); showEl("connect-modal"); }
+
+// Connect to a peer the native layer discovered over BLE or Wi-Fi Direct.
+// The Android shell exposes window.gmNativePeers; outside the APK this simply
+// explains the limitation instead of silently doing nothing.
+function connectViaNativeTransport(peerId) {
+    const peer = (window.gmNativePeers || {})[peerId];
+    if (!peer) { connectToPeer(peerId); return; }
+    const bridge = window.GhostNative;
+    if (!bridge || typeof bridge.connect !== "function") {
+        showToast("Native Wi-Fi Direct connect needs the Android app");
+        return;
+    }
+    try {
+        bridge.connect(peer.address || peerId);
+        showToast(peer.transport === "wifi-direct" ? "Requesting Wi-Fi Direct connection…" : "Opening Bluetooth link…");
+    } catch (e) {
+        console.error("Native connect failed:", e);
+        showToast("Could not start that native connection");
+    }
+}
+
+// Called from the Android side (GhostNative.onPeersChanged) with the current
+// BLE / Wi-Fi-Direct peer table, so both reach lists pick the peers up.
+window.gmNativePeers = window.gmNativePeers || {};
+window.gmApplyNativePeers = function (peers) {
+    window.gmNativePeers = {};
+    (peers || []).forEach(p => { if (p && p.ghostId) window.gmNativePeers[p.ghostId] = p; });
+    renderPeerLists();
+};
 
 // ===== GROUP CHAT: creation =====
 function openNewGroupModal() {
@@ -1123,6 +1505,7 @@ function closeOfflineConnect() {
 
 function resetOfflinePanels() {
     switchOfflineTab("create");
+    hideEl("offline-flow-wrap");
     document.getElementById("offline-create-step1").classList.remove("hidden");
     document.getElementById("offline-create-step2").classList.add("hidden");
     document.getElementById("offline-create-step3").classList.add("hidden");
@@ -1142,11 +1525,15 @@ function resetOfflinePanels() {
     }
 }
 
+// The "Create Chat / Join Chat" split button row is gone — the two small QR
+// icons drive these flows now, so the old tab buttons no longer exist.
 function switchOfflineTab(tab) {
-    document.getElementById("offline-tab-create").classList.toggle("active", tab === "create");
-    document.getElementById("offline-tab-join").classList.toggle("active", tab === "join");
-    document.getElementById("offline-create-panel").classList.toggle("hidden", tab !== "create");
-    document.getElementById("offline-join-panel").classList.toggle("hidden", tab !== "join");
+    const createPanel = document.getElementById("offline-create-panel");
+    const joinPanel = document.getElementById("offline-join-panel");
+    if (createPanel) createPanel.classList.toggle("hidden", tab !== "create");
+    if (joinPanel) joinPanel.classList.toggle("hidden", tab !== "join");
+    const flow = document.getElementById("offline-flow-wrap");
+    if (flow) flow.classList.toggle("hidden", false);
 }
 
 function offlineIceConfig() {
@@ -1227,6 +1614,9 @@ function renderOfflineQR(elId, payloadObj) {
         // scanning genuinely hard — laptop webcams especially struggle to
         // focus that close on another screen. A one-tap "copy code" lets
         // testers skip the camera entirely and paste it on the other side.
+        // Each render used to append another copy button, so they piled up
+        // under the QR after every retry.
+        container.parentElement.querySelectorAll(".qr-copy-code-btn").forEach(b => b.remove());
         const copyBtn = document.createElement("button");
         copyBtn.className = "qr-copy-code-btn";
         copyBtn.innerText = "📋 Copy code (for testing without camera)";
@@ -1264,6 +1654,8 @@ function pasteCodeManually() {
 
 // ----- HOST (creator) side -----
 async function startOfflineHost() {
+    gmCloseOfflineFlowSoonIfIdle();
+    showEl("offline-flow-wrap");
     if (typeof QRCode === "undefined") {
         showToast("QR library not loaded — connect to internet once, then this works offline forever after");
         return;
@@ -1369,11 +1761,13 @@ function finishOfflineConnect() {
     const peerId = finishOfflineConnectPeerId;
     scrollToMainTab(0);
     resetOfflinePanels();
+    hideEl("offline-flow-wrap");
     if (peerId) openChat(peerId);
 }
 
 // ----- JOIN (scanner) side -----
 function startOfflineJoinScan() {
+    showEl("offline-flow-wrap");
     document.getElementById("offline-join-step1").querySelector(".primary-btn")?.classList.add("hidden");
     startCameraScan(async decoded => {
         try {
@@ -1405,6 +1799,23 @@ function startOfflineJoinScan() {
         }
     }, "Scan Their QR");
 }
+
+// ----- Scanning geometry (pure, so it can be unit-tested) -----
+// Two windows are decoded per pass, both downscaled before jsQR ever sees
+// them: the centre square (what the on-screen scan frame shows) and, every Nth
+// frame, the whole frame at a lower resolution.
+const GM_SCAN = { cropSize: 480, fullSize: 880, fullEvery: 4 };
+function gmScanRects(vw, vh) {
+    const side = Math.max(1, Math.min(vw, vh));
+    const crop = Math.max(1, Math.min(GM_SCAN.cropSize, side));
+    const scale = Math.min(1, GM_SCAN.fullSize / Math.max(vw, vh, 1));
+    return [
+        { label: "crop", sx: Math.round((vw - side) / 2), sy: Math.round((vh - side) / 2), sw: side, sh: side, dw: crop, dh: crop },
+        { label: "full", sx: 0, sy: 0, sw: vw, sh: vh, dw: Math.max(1, Math.round(vw * scale)), dh: Math.max(1, Math.round(vh * scale)) }
+    ];
+}
+// Exposed for tests/diagnostics: how many frames were decoded and by which pass.
+let gmScanStats = { frames: 0, cropHits: 0, fullHits: 0, width: 0, height: 0 };
 
 // ----- Shared fullscreen camera scanning helper -----
 function startCameraScan(onDecoded, title) {
@@ -1441,30 +1852,83 @@ function startCameraScan(onDecoded, title) {
         video.play().catch(() => {});
         video.onloadedmetadata = () => video.play().catch(() => {});
 
+        // A slightly soft frame is the single most common reason a QR "never
+        // scans" on a phone: ask for continuous autofocus when the camera
+        // supports it (silently ignored everywhere else).
+        try {
+            const track = stream.getVideoTracks && stream.getVideoTracks()[0];
+            const caps = track && track.getCapabilities ? track.getCapabilities() : null;
+            if (caps && Array.isArray(caps.focusMode) && caps.focusMode.indexOf("continuous") !== -1) {
+                track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(() => {});
+            }
+        } catch (e) { /* focus control is a bonus, never a blocker */ }
+
+        gmScanStats = { frames: 0, cropHits: 0, fullHits: 0, width: 0, height: 0 };
+        let frameNo = 0, waitingFrames = 0;
+
+        function schedule() {
+            if (offlineCameraStream) offlineScanLoopId = requestAnimationFrame(tick);
+        }
+
         function tick() {
             if (!offlineCameraStream) return;
-            if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                // "attemptBoth" tries both normal and inverted scans per
-                // frame — costs a bit more CPU but scans far more reliably
-                // under real phone-camera lighting/glare than "dontInvert".
-                const code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: "attemptBoth" });
-                if (code && code.data) {
-                    Promise.resolve(onDecoded(code.data)).then(ok => {
-                        if (!ok) offlineScanLoopId = requestAnimationFrame(tick);
-                    });
-                    return;
+            // readyState 2 (HAVE_CURRENT_DATA) is enough to draw — requiring
+            // exactly 4 stalled the loop on some Android WebView builds.
+            if (video.readyState < 2 || !video.videoWidth) {
+                waitingFrames++;
+                if (waitingFrames === 150) {
+                    showToast("Camera opened but sent no frames — close other camera apps and try again");
                 }
+                schedule();
+                return;
             }
-            offlineScanLoopId = requestAnimationFrame(tick);
+            waitingFrames = 0;
+            frameNo++;
+            gmScanStats.frames++;
+            gmScanStats.width = video.videoWidth;
+            gmScanStats.height = video.videoHeight;
+
+            const rects = gmScanRects(video.videoWidth, video.videoHeight);
+            const passes = (frameNo % GM_SCAN.fullEvery === 0) ? rects : [rects[0]];
+            let found = null;
+            try {
+                for (const r of passes) {
+                    canvas.width = r.dw;
+                    canvas.height = r.dh;
+                    ctx.drawImage(video, r.sx, r.sy, r.sw, r.sh, 0, 0, r.dw, r.dh);
+                    const imgData = ctx.getImageData(0, 0, r.dw, r.dh);
+                    // "attemptBoth" tries normal and inverted scans — costs a
+                    // bit more CPU but survives glare far better than
+                    // "dontInvert".
+                    const code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: "attemptBoth" });
+                    if (code && code.data) {
+                        if (r.label === "crop") gmScanStats.cropHits++; else gmScanStats.fullHits++;
+                        found = code.data;
+                        break;
+                    }
+                }
+            } catch (e) {
+                console.error("Scan frame failed:", e);
+            }
+
+            if (!found) { schedule(); return; }
+            // Stop decoding while the handler runs; resume only if it says the
+            // code was not usable (e.g. another app's QR, not a Ghost Mesh one).
+            Promise.resolve(onDecoded(found)).then(ok => {
+                if (ok) return;
+                gmScanStats.frames = 0;
+                schedule();
+            });
         }
+
         tick();
     }
 
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } } })
+    gmGetUserMedia({
+        // A modest resolution focuses better and decodes faster than the
+        // sensor maximum on almost every phone camera.
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }
+    })
         .then(beginScanLoop)
         .catch(err => {
             console.error("Rear camera request failed:", err);
@@ -1479,7 +1943,7 @@ function startCameraScan(onDecoded, title) {
                 return;
             }
             // Rear-camera constraint not satisfiable — fall back to any available camera.
-            navigator.mediaDevices.getUserMedia({ video: true })
+            gmGetUserMedia({ video: true })
                 .then(beginScanLoop)
                 .catch(err2 => {
                     console.error("Fallback camera request failed:", err2);
@@ -1493,6 +1957,13 @@ function startCameraScan(onDecoded, title) {
         });
 }
 
+// Hides the offline flow panel when no camera/QR step is active, so the WiFi
+// tab stays a clean list of reachable Ghosts by default.
+function gmCloseOfflineFlowSoonIfIdle() {
+    const scanning = !!(offlineCameraStream || document.getElementById("offline-qr-host")?.innerHTML);
+    if (!scanning) hideEl("offline-flow-wrap");
+}
+
 function cancelCameraScan() {
     stopOfflineCamera();
     const wasJoinTab = !document.getElementById("offline-join-panel").classList.contains("hidden");
@@ -1504,6 +1975,7 @@ function cancelCameraScan() {
     document.getElementById("offline-join-step1").querySelector(".primary-btn")?.classList.remove("hidden");
     document.getElementById("offline-join-step2").classList.add("hidden");
     switchOfflineTab(wasJoinTab ? "join" : "create");
+    hideEl("offline-flow-wrap");
 }
 
 function stopOfflineCamera() {
@@ -2032,9 +2504,15 @@ function broadcastToMesh(obj) {
 
 // ===== TYPING =====
 let lastTypingPingAt = 0;
+let typingListenerAttached = false;
 function setupTypingListener() {
     const inp = document.getElementById("msg-input");
     if (!inp) return;
+    // initApp() and the DOMContentLoaded handler both call this — without the
+    // guard the listener attached twice, so every keystroke sent two typing
+    // packets down the same data channel.
+    if (typingListenerAttached) return;
+    typingListenerAttached = true;
     inp.addEventListener("input", () => {
         updateComposerButtons();
         // FIX: sending an "isTyping" packet on every single keystroke floods
@@ -2322,7 +2800,7 @@ function getSupportedAudioMime() {
 function toggleVoiceRecord() {
     const btn = document.getElementById("voice-record-btn");
     if (!isRecordingAudio) {
-        navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+        gmGetUserMedia({ audio: true }).then(stream => {
             recordedAudioChunks = [];
             const mime = getSupportedAudioMime();
             try { mediaRecorderInstance = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream); }
@@ -2340,7 +2818,7 @@ function toggleVoiceRecord() {
             isRecordingAudio = true;
             btn.style.color = "var(--danger)";
             btn.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>`;
-        }).catch(() => showToast("Mic permission denied"));
+        }).catch(e => { if (isInsecureMediaError(e)) return; showToast("Mic permission denied"); });
     } else {
         mediaRecorderInstance.stop();
         isRecordingAudio = false;
@@ -2398,7 +2876,22 @@ function openCallUI(peerId, type, statusText) {
     if (isVideo && localMediaStream) document.getElementById("local-video").srcObject = localMediaStream;
 }
 
+// Info about the call currently ringing on this device. Kept separate from
+// pendingIncomingCallEvent (which holds the PeerJS/offline object itself) so
+// the UI can time out and clean up even if the caller vanishes.
+let pendingIncomingCallInfo = null;
+let incomingCallTimeout = null;
+
 function showIncomingCallUI(peerId, type) {
+    pendingIncomingCallInfo = { peerId, type, startedAt: Date.now() };
+    // A caller that gives up must not leave this screen ringing forever.
+    clearTimeout(incomingCallTimeout);
+    incomingCallTimeout = setTimeout(() => {
+        if (!pendingIncomingCallInfo) return;
+        console.warn("Incoming call timed out after 45s");
+        rejectIncomingCall();
+        showToast("Missed call");
+    }, 45000);
     showEl("call-screen");
     document.getElementById("call-peer-label").innerText = chatData[peerId]?.displayName || peerId;
     document.getElementById("call-status-label").innerText = type === 'video' ? "Incoming Video Call" : "Incoming Voice Call";
@@ -2436,14 +2929,14 @@ function initiateP2PCall(type) {
     const target = currentChatPeer || activeConnections[0].peer;
     if (offlinePeerConnections[target]) { startOfflineCall(target, type); return; }
 
-    navigator.mediaDevices.getUserMedia({ audio: true, video: type === 'video' }).then(stream => {
+    gmGetUserMedia({ audio: true, video: type === 'video' }).then(stream => {
         localMediaStream = stream;
         openCallUI(target, type, type === 'video' ? "Video Calling..." : "Voice Calling...");
         if (type === 'video') document.getElementById("local-video").srcObject = stream;
         activeP2PCallInstance = myPeerInstance.call(target, stream, { metadata: { type } });
         listenCallStream(activeP2PCallInstance, type);
         playRingtone('ring');
-    }).catch(() => showToast("Camera/Mic access denied"));
+    }).catch(e => { if (isInsecureMediaError(e)) return; showToast("Camera/Mic access denied"); });
 }
 
 function listenCallStream(callObj, type) {
@@ -2461,9 +2954,42 @@ function listenCallStream(callObj, type) {
     callObj.on('error', endCallFlow);
 }
 
+// Runs when a PeerJS (online) call arrives. Previously this blindly
+// overwrote pendingIncomingCallEvent and showed the UI, which is how the
+// receiver ended up erroring: a second call overwrote the first (so the first
+// caller rang forever), a call that the caller had already cancelled stayed on
+// screen, and tapping Accept then answered a dead connection.
 function handleIncomingCall(call) {
+    if (!call || !call.peer) return;
+    if (blockedPeers.has(call.peer)) { try { call.close(); } catch (e) {} return; }
+
+    if (pendingIncomingCallEvent || activeP2PCallInstance || activeOfflineCallPeer) {
+        try { call.close(); } catch (e) {}
+        showToast("Already on a call — rejected " + call.peer);
+        return;
+    }
+
     pendingIncomingCallEvent = call;
-    showIncomingCallUI(call.peer, call.metadata?.type || 'voice');
+    // The peer can hang up while it is still ringing here: without these
+    // handlers the incoming-call screen stayed open and Accept then threw.
+    if (typeof call.on === "function") {
+        call.on("close", () => {
+            if (pendingIncomingCallEvent === call && pendingIncomingCallInfo) {
+                pendingIncomingCallInfo = null;
+                clearTimeout(incomingCallTimeout);
+                stopRingtone();
+                hideEl("incoming-call-overlay");
+                hideEl("call-screen");
+                showToast("Missed call from " + call.peer);
+            }
+        });
+        call.on("error", err => {
+            console.error("Incoming call error:", err);
+            rejectIncomingCall();
+            showToast("Call failed: " + (err && err.message ? err.message : "connection error"));
+        });
+    }
+    showIncomingCallUI(call.peer, (call.metadata && call.metadata.type) || 'voice');
 }
 
 // ----- Offline (QR/WiFi) calling: renegotiates the SAME RTCPeerConnection
@@ -2474,7 +3000,7 @@ async function startOfflineCall(peerId, type) {
     const pc = offlinePeerConnections[peerId];
     if (!pc) { showToast("Peer connection not found"); return; }
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: type === 'video' });
+        const stream = await gmGetUserMedia({ audio: true, video: type === 'video' });
         localMediaStream = stream;
         stream.getTracks().forEach(t => pc.addTrack(t, stream));
         pc.ontrack = event => {
@@ -2492,7 +3018,7 @@ async function startOfflineCall(peerId, type) {
         playRingtone('ring');
     } catch(e) {
         console.error(e);
-        showToast("Camera/Mic access denied");
+        if (!isInsecureMediaError(e)) showToast("Camera/Mic access denied");
     }
 }
 
@@ -2503,57 +3029,119 @@ function attachRemoteStream(stream) {
 }
 
 async function acceptIncomingCall() {
+    const call = pendingIncomingCallEvent;
     stopRingtone();
+    clearTimeout(incomingCallTimeout);
     hideEl("incoming-call-overlay");
-    const isOffline = !!pendingIncomingCallEvent?.offline;
-    const type = isOffline ? pendingIncomingCallEvent.callType : (pendingIncomingCallEvent?.metadata?.type || 'voice');
 
+    if (!call) {
+        // Accept tapped twice, or the caller gave up first.
+        hideEl("call-screen");
+        showToast("That call already ended");
+        return;
+    }
+    if (!call.offline && call.open === false) {
+        pendingIncomingCallEvent = null;
+        pendingIncomingCallInfo = null;
+        endCallFlow();
+        showToast("That call already ended");
+        return;
+    }
+
+    const isOffline = !!call.offline;
+    const type = isOffline ? call.callType : ((call.metadata && call.metadata.type) || 'voice');
+
+    let stream;
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: type === 'video' });
-        localMediaStream = stream;
-        document.getElementById("call-video-toggle-btn").classList.toggle("hidden", type !== 'video');
-        document.getElementById("call-camera-switch-btn").classList.toggle("hidden", type !== 'video');
-        document.getElementById("local-video").classList.toggle("hidden", type !== 'video');
-        if (type === 'video') document.getElementById("local-video").srcObject = stream;
+        stream = await gmGetUserMedia({ audio: true, video: type === 'video' });
+    } catch (e) {
+        // Out of camera/mic permission or no hardware. Answering is impossible,
+        // so tell the caller instead of leaving them ringing for 45s.
+        console.error("Could not get media for incoming call:", e);
+        if (!isInsecureMediaError(e)) showToast("Mic/Camera unavailable — call rejected");
+        if (isOffline) sendToPeer(call.peerId, { type: "voip-end" });
+        else { try { call.close(); } catch (err) {} }
+        pendingIncomingCallEvent = null;
+        pendingIncomingCallInfo = null;
+        endCallFlow();
+        return;
+    }
 
-        if (isOffline) {
-            const peerId = pendingIncomingCallEvent.peerId;
-            const pc = offlinePeerConnections[peerId];
-            if (!pc) { showToast("Peer connection not found"); return; }
+    localMediaStream = stream;
+    document.getElementById("call-video-toggle-btn").classList.toggle("hidden", type !== 'video');
+    document.getElementById("call-camera-switch-btn").classList.toggle("hidden", type !== 'video');
+    document.getElementById("local-video").classList.toggle("hidden", type !== 'video');
+    if (type === 'video') document.getElementById("local-video").srcObject = stream;
+
+    if (isOffline) {
+        const peerId = call.peerId;
+        const pc = offlinePeerConnections[peerId];
+        if (!pc) {
+            stream.getTracks().forEach(t => t.stop());
+            localMediaStream = null;
+            sendToPeer(peerId, { type: "voip-end" });
+            pendingIncomingCallEvent = null;
+            pendingIncomingCallInfo = null;
+            endCallFlow();
+            showToast("Peer connection was closed — call ended");
+            return;
+        }
+        try {
             stream.getTracks().forEach(t => pc.addTrack(t, stream));
             pc.ontrack = event => {
-            attachRemoteStream(event.streams[0]);
-            toggleCallVideoUI(event.streams[0].getVideoTracks().length > 0);
-        };
+                attachRemoteStream(event.streams[0]);
+                toggleCallVideoUI(event.streams[0].getVideoTracks().length > 0);
+            };
             pc.onicecandidate = e => { if (e.candidate) sendToPeer(peerId, { type: "voip-ice", candidate: e.candidate }); };
 
-            await pc.setRemoteDescription(new RTCSessionDescription(pendingIncomingCallEvent.sdp));
+            await pc.setRemoteDescription(new RTCSessionDescription(call.sdp));
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             sendToPeer(peerId, { type: "voip-answer", sdp: pc.localDescription });
 
             activeOfflineCallPeer = peerId; activeOfflineCallType = type;
+            pendingIncomingCallEvent = null;
+            pendingIncomingCallInfo = null;
             updateCallStatusLabel("Connected");
             playRingtone('connect');
             startCallTimer();
-        } else {
-            pendingIncomingCallEvent.answer(stream);
-            listenCallStream(pendingIncomingCallEvent, type);
+        } catch (e) {
+            console.error("Offline call answer failed:", e);
+            sendToPeer(peerId, { type: "voip-end" });
+            pendingIncomingCallEvent = null;
+            pendingIncomingCallInfo = null;
+            endCallFlow();
+            showToast("Could not answer — connection error");
         }
-    } catch(e) {
-        console.error(e);
-        showToast("Camera/Mic access denied");
+        return;
+    }
+
+    try {
+        call.answer(stream);
+        listenCallStream(call, type);
+        pendingIncomingCallInfo = null;
+    } catch (e) {
+        console.error("Answering the call failed:", e);
+        stream.getTracks().forEach(t => t.stop());
+        localMediaStream = null;
+        pendingIncomingCallEvent = null;
+        pendingIncomingCallInfo = null;
+        endCallFlow();
+        showToast("Could not answer that call");
     }
 }
-
 function rejectIncomingCall() {
     stopRingtone();
-    if (pendingIncomingCallEvent?.offline) {
-        sendToPeer(pendingIncomingCallEvent.peerId, { type: "voip-end" });
-    } else {
-        pendingIncomingCallEvent?.close();
+    clearTimeout(incomingCallTimeout);
+    const call = pendingIncomingCallEvent;
+    try {
+        if (call && call.offline) sendToPeer(call.peerId, { type: "voip-end" });
+        else if (call && typeof call.close === "function") call.close();
+    } catch (e) {
+        console.error("Rejecting the call failed:", e);
     }
     pendingIncomingCallEvent = null;
+    pendingIncomingCallInfo = null;
     hideEl("call-screen");
     hideEl("incoming-call-overlay");
 }
@@ -2582,7 +3170,7 @@ async function switchCallCamera() {
     const wantFront = !isUsingFrontCamera;
     const facingMode = wantFront ? "user" : "environment";
     try {
-        const newStream = await navigator.mediaDevices.getUserMedia({
+        const newStream = await gmGetUserMedia({
             video: { facingMode: { exact: facingMode } },
             audio: false
         });
@@ -2639,6 +3227,7 @@ function endCallFlow() {
 
     localMediaStream?.getTracks().forEach(t => t.stop());
     localMediaStream = null; activeP2PCallInstance = null; pendingIncomingCallEvent = null;
+    pendingIncomingCallInfo = null; clearTimeout(incomingCallTimeout);
     activeOfflineCallPeer = null; activeOfflineCallType = null;
 
     document.getElementById("remote-video").srcObject = null;
@@ -2682,7 +3271,27 @@ function toggleSpeaker() {
 }
 
 // ===== RADAR MAP =====
+// Leaflet's default marker icons are fetched from images/marker-icon.png,
+// which this project doesn't ship — every L.marker() rendered a broken image
+// and logged a 404. A divIcon draws the pin with CSS instead, so no extra
+// image files are needed.
+function gmMapPin(lat, lng, popupHtml, mapInst, openNow) {
+    if (typeof L === "undefined" || !mapInst) return null;
+    const marker = L.marker([lat, lng], {
+        icon: L.divIcon({
+            className: "gm-map-pin",
+            html: "<span></span>",
+            iconSize: [22, 22],
+            iconAnchor: [11, 11],
+            popupAnchor: [0, -12]
+        })
+    }).addTo(mapInst).bindPopup(popupHtml);
+    if (openNow) marker.openPopup();
+    return marker;
+}
+
 function initRadarMap() {
+    if (typeof L === "undefined") return; // leaflet.js unavailable — everything else still works
     try {
         radarMapInstance = L.map('live-radar-map').setView([20.5937, 78.9629], 5);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(radarMapInstance);
@@ -2690,7 +3299,7 @@ function initRadarMap() {
             userLat = pos.coords.latitude; userLng = pos.coords.longitude;
             hasRealLocation = true;
             radarMapInstance.setView([userLat, userLng], 13);
-            L.marker([userLat, userLng]).addTo(radarMapInstance).bindPopup(`<b>You (${userGhostID})</b>`).openPopup();
+            gmMapPin(userLat, userLng, `<b>You (${userGhostID})</b>`, radarMapInstance, true);
             spawnNearbyNodes(userLat, userLng, radarMapInstance);
         }, () => spawnNearbyNodes(20.5937, 78.9629, radarMapInstance));
     } catch(e) { console.error(e); }
@@ -2711,9 +3320,9 @@ function spawnNearbyNodes(lat, lng, mapInst) {
     // Real peers only — markers added when peers connect via setupConn
     activeConnections.forEach(conn => {
         const name = chatData[conn.peer]?.displayName || conn.peer;
-        L.marker([lat + (Math.random()-0.5)*0.01, lng + (Math.random()-0.5)*0.01])
-            .addTo(mapInst)
-            .bindPopup(`<b>${name}</b><br>P2P Connected<br><button class="map-connect-btn" onclick="openChat('${conn.peer}')">Open Chat</button>`);
+        gmMapPin(lat + (Math.random()-0.5)*0.01, lng + (Math.random()-0.5)*0.01,
+            `<b>${name}</b><br>P2P Connected<br><button class="map-connect-btn" onclick="openChat('${conn.peer}')">Open Chat</button>`,
+            mapInst);
     });
     if (activeConnections.length === 0) {
         L.popup().setLatLng([lat, lng]).setContent("No peers nearby yet").openOn(mapInst);
@@ -2724,9 +3333,13 @@ function spawnNearbyNodes(lat, lng, mapInst) {
 function sendPushNotif(sender, text) {
     if (!notificationsEnabled) return;
     if (document.hasFocus()) return;
-    if (Notification.permission === "granted") {
+    // Runs on every incoming message, so it must never throw in environments
+    // without the Notification API (plain Android WebView wrappers, some
+    // in-app browsers).
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    try {
         new Notification("Ghost Mesh — " + sender, { body: text, icon: "icon-192.png" });
-    }
+    } catch (e) { /* notification blocked — the in-app banner already showed it */ }
 }
 
 // ===== MENUS =====
@@ -2841,11 +3454,36 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 });
 
-// Prevent pull-to-refresh
+// Prevent pull-to-refresh — but never block real scrolling. Anything inside a
+// scrollable container (messages, chat list, theme grid, Leaflet map, modals,
+// online list …) or any drag that isn't a pull down from the very top of the
+// page is left alone, so touch scrolling keeps working.
+let lastTouchStartY = 0;
+document.addEventListener("touchstart", e => {
+    lastTouchStartY = (e.touches && e.touches[0]) ? e.touches[0].clientY : 0;
+}, { passive: true });
 document.addEventListener("touchmove", e => {
-    if (e.target.closest("#messages-container, #chat-list-container, .profile-content, .modal-box, #online-users-list")) return;
+    const touch = e.touches && e.touches[0];
+    if (!touch) return;
+    if (touch.clientY <= lastTouchStartY) return;              // not a downward pull
+    if (window.scrollY > 0 || document.documentElement.scrollTop > 0) return;
+    if (e.target.closest("#messages-container, #chat-list-container, .profile-content, .modal-box, #nearby-ghosts-list, #wifi-reach-list, #wifi-reach-panel, .leaflet-container, #theme-grid, .modal-overlay")) return;
+    if (isInsideScrollable(e.target)) return;
     e.preventDefault();
 }, { passive: false });
+
+// True when the target or any ancestor is a scroll container of its own.
+function isInsideScrollable(target) {
+    let el = (target && target.nodeType === 1) ? target : null;
+    while (el && el !== document.body && el !== document.documentElement) {
+        if (el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1) {
+            const style = getComputedStyle(el);
+            if (/(auto|scroll|overlay)/.test(style.overflowY + style.overflowX)) return true;
+        }
+        el = el.parentElement;
+    }
+    return false;
+}
 
 // ===== HELPERS =====
 function nowTime() { return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
@@ -2910,7 +3548,10 @@ function renderCreditsUI() {
     earnBtns.forEach(b => b.disabled = !hasProfile);
 
     if (premiumBtn) {
-        premiumBtn.innerText = isPremiumUnlocked() ? "⭐ Premium Active" : "⭐ Go Premium";
+        // innerHTML (not innerText) so the inline star icon survives — emoji
+        // icons are gone from the whole premium/credits surface.
+        const star = '<svg viewBox="0 0 24 24" fill="currentColor" width="11" height="11"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>';
+        premiumBtn.innerHTML = star + (isPremiumUnlocked() ? " Premium Active" : " Premium");
     }
 
     // Highlight the currently active plan (if any) in the plans grid
@@ -2976,16 +3617,30 @@ function openSendCreditModal() {
     showEl("send-credit-modal");
 }
 function closeSendCreditModal() { hideEl("send-credit-modal"); }
+
+// ===== NOT ENOUGH CREDITS PROMPT =====
+// #not-enough-credits-modal exists in index.html but had no code behind it,
+// so its buttons did nothing and the closeNotEnoughCreditsModal() handler
+// referenced in the HTML was an undefined function.
+function showNotEnoughCredits(message) {
+    const msgEl = document.getElementById("not-enough-credits-msg");
+    if (msgEl && message) msgEl.innerText = message;
+    showEl("not-enough-credits-modal");
+}
+function closeNotEnoughCreditsModal() { hideEl("not-enough-credits-modal"); }
 function pickCreditAmount(amt) {
     sendCreditAmount = amt;
     document.querySelectorAll(".send-credit-amount-btn").forEach(b => b.classList.toggle("active", parseInt(b.dataset.amt) === amt));
-    document.getElementById("send-credit-confirm-btn").innerText = `👻 Send ${amt} Credit${amt>1?'s':''}`;
+    document.getElementById("send-credit-confirm-btn").innerHTML =
+        '<svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>' +
+        `<span>Send ${amt} Credit${amt>1?'s':''}</span>`;
 }
 function confirmSendCredit() {
     if (!currentChatPeer) return;
     const amt = sendCreditAmount;
     if (getCredits() < amt) {
         showToast(`Not enough credits — you have ${getCredits()}`);
+        showNotEnoughCredits(`Sending ${amt} credits needs ${amt} — you have ${getCredits()}.`);
         return;
     }
     setCredits(getCredits() - amt);
@@ -3004,6 +3659,7 @@ function unlockPremiumTrial() {
     const COST = 20;
     if (getCredits() < COST) {
         showToast(`Need ${COST} credits — you have ${getCredits()}. Watch ads or share to earn more!`);
+        showNotEnoughCredits(`Premium unlock costs ${COST} credits — you have ${getCredits()}.`);
         return;
     }
     setCredits(getCredits() - COST);
@@ -3090,6 +3746,70 @@ function openLocationOnRadar(lat, lng) {
     setTimeout(() => {
         radarMapInstance.invalidateSize();
         radarMapInstance.setView([lat, lng], 15);
-        L.marker([lat, lng]).addTo(radarMapInstance).bindPopup("📍 Shared location").openPopup();
+        gmMapPin(lat, lng, "📍 Shared location", radarMapInstance, true);
     }, 250);
+}
+
+// ===== ANDROID HARDWARE BACK =====
+// The Android shell is a single WebView, so MainActivity asks the page before
+// leaving the app (see handleBackPressed() there). Returns true when the press
+// was handled inside the app, false when Android should take over and exit.
+const androidBackLayers = [
+    ["ghost-assistant-modal", () => gmCloseIdentityModals()],
+    ["phrase-backup-modal", () => gmCloseIdentityModals()],
+    // The signup phrase modal is intentionally NOT dismissable: it must be
+    // confirmed first (gmIdentityBackBlocked keeps back from closing it).
+    ["media-viewer", () => closeMediaViewer()],
+    ["qr-scan-overlay", () => cancelCameraScan()],
+    ["incoming-call-overlay", () => rejectIncomingCall()],
+    ["call-screen", () => endCurrentCall()],
+    ["watch-ad-overlay", () => hideEl("watch-ad-overlay")],
+    ["premium-modal", () => closePremiumModal()],
+    ["send-credit-modal", () => closeSendCreditModal()],
+    ["not-enough-credits-modal", () => closeNotEnoughCreditsModal()],
+    ["reaction-modal", () => closeReactionModal()],
+    ["request-modal", () => hideEl("request-modal")],
+    ["connect-modal", () => closeNewConnect()],
+    ["new-group-modal", () => closeNewGroupModal()],
+    ["feedback-modal", () => closeFeedbackModal()],
+    ["destruct-overlay", () => hideEl("destruct-overlay")],
+    ["theme-screen", () => showScreen("chatlist-screen")],
+    ["profile-screen", () => closeProfile()],
+    ["chat-screen", () => goBackToList()]
+];
+
+// True while the mandatory signup phrase step is open — Android back must
+// not be able to skip it.
+function gmIdentityBackBlocked() {
+    const setup = document.getElementById("phrase-setup-modal");
+    if (!setup || setup.classList.contains("hidden")) return false;
+    return (typeof GMIdentity !== "undefined") && GMIdentity.phraseFlowBlocked();
+}
+
+function handleAndroidBack() {
+    if (gmIdentityBackBlocked()) {
+        showToast("Write down your recovery phrase and confirm it to continue");
+        return true;
+    }
+    // Open menus and pickers are the topmost thing on screen — close those first
+    const openMenu = ["main-menu", "chat-menu", "radar-dot-menu", "emoji-picker", "attach-menu"]
+        .some(id => {
+            const el = document.getElementById(id);
+            return el && !el.classList.contains("hidden");
+        });
+    if (openMenu) {
+        closeAllMenus();
+        hideEl("emoji-picker");
+        hideEl("attach-menu");
+        return true;
+    }
+
+    for (const [id, close] of androidBackLayers) {
+        const el = document.getElementById(id);
+        if (el && !el.classList.contains("hidden")) {
+            try { close(); } catch (e) { console.error("Android back handler failed for " + id, e); }
+            return true;
+        }
+    }
+    return false; // nothing left to close — let Android leave the app
 }
