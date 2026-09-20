@@ -1,0 +1,4 @@
+// Top-level build file. Plugin versions live here and are applied in :app.
+plugins {
+    id 'com.android.application' version '8.7.3' apply false
+}

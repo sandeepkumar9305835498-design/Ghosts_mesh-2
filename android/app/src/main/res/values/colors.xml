@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Matches the "bg" variable in style.css so launch never flashes another colour -->
+    <color name="gm_bg">#FF0D0B14</color>
+    <!-- Matches the "accent" variable in style.css -->
+    <color name="gm_accent">#FF9B59F7</color>
+</resources>

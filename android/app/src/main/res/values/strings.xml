@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Ghost Mesh</string>
+    <string name="no_app_for_link">No app on this device can open that link</string>
+    <string name="file_picker_unavailable">No file picker available on this device</string>
+    <string name="mesh_channel_name">Nearby discovery</string>
+    <string name="mesh_channel_description">Keeps looking for nearby Ghost Mesh devices over Bluetooth and Wi-Fi Direct.</string>
+    <string name="mesh_notification_title">Ghost Mesh is looking for nearby devices</string>
+    <string name="mesh_notification_text">Bluetooth + Wi-Fi Direct discovery is on. Tap to open the app.</string>
+</resources>
