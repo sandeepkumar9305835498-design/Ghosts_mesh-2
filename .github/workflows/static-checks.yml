@@ -1,0 +1,25 @@
+name: Static checks
+
+# This project ships straight from source (no bundler, no build step), so these
+# cross-file checks are the whole automated gate. They are dependency-free and
+# finish in seconds, which is why they run on every push and pull request.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-checks:
+    name: Static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Verify static app wiring
+        run: node scripts/verify-static.mjs
