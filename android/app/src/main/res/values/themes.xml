@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Dark theme with no action bar: the web app renders its own header.
+      Theme.AppCompat (not .Light) also gives the JS alert/confirm/prompt
+      dialogs the same dark look as the app.
+    -->
+    <style name="Theme.GhostMesh" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@color/gm_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="colorPrimary">@color/gm_accent</item>
+        <item name="colorPrimaryDark">@color/gm_bg</item>
+        <item name="colorAccent">@color/gm_accent</item>
+    </style>
+</resources>

@@ -1,0 +1,199 @@
+plugins {
+    id 'com.android.application'
+}
+
+// ---------------------------------------------------------------------------
+// The Ghost Mesh web app lives at the repository root, one folder above
+// android/. It is copied into the APK's assets at build time, so there is only
+// ONE copy of the web code to maintain (edit index.html / script.js at the
+// repo root and it is packaged on the next build).
+// ---------------------------------------------------------------------------
+def webAppRoot = rootProject.projectDir.parentFile
+def webAppFiles = [
+        "index.html",
+        "script.js",
+        "gm-identity.js",
+        "bip39-wordlist.js",
+        "style.css",
+        "service-worker.js",
+        "manifest.json",
+        "peerjs.min.js",
+        "leaflet.js",
+        "leaflet.css",
+        "three.min.js",
+        "qrcode.min.js",
+        "jsQR.js",
+        "icon-192.png",
+        "icon-512.png"
+]
+
+def copyWebAssets = tasks.register("copyWebAssets", Copy) {
+    doFirst {
+        if (!new File(webAppRoot, "index.html").exists()) {
+            throw new GradleException("Web app not found at ${webAppRoot} — expected index.html beside the android/ folder.")
+        }
+        logger.lifecycle("copyWebAssets: packaging web app from ${webAppRoot}")
+    }
+    from(webAppRoot) {
+        include webAppFiles
+        into "www"
+    }
+    into layout.projectDirectory.dir("src/main/assets")
+    inputs.files(webAppFiles.collect { new File(webAppRoot, it) })
+    outputs.dir(layout.projectDirectory.dir("src/main/assets/www"))
+}
+
+// ---------------------------------------------------------------------------
+// Release (upload key) signing for Play Store uploads.
+//
+// Credentials are read from android/keystore.properties (gitignored), or from
+// environment variables when that file is absent — so neither Android Studio
+// nor CI ever needs secrets committed to the repository:
+//
+//   keystore.properties key | environment variable
+//   ------------------------+---------------------------------
+//   storeFile               | GHOSTMESH_STORE_FILE
+//   storePassword           | GHOSTMESH_STORE_PASSWORD
+//   keyAlias                | GHOSTMESH_KEY_ALIAS
+//   keyPassword             | GHOSTMESH_KEY_PASSWORD
+//
+// Copy keystore.properties.example -> keystore.properties to start.
+// Full instructions (keystore creation, AAB/APK builds, Play upload):
+// see android/RELEASE.md.
+// ---------------------------------------------------------------------------
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+def hasKeystoreProperties = keystorePropertiesFile.isFile()
+if (hasKeystoreProperties) {
+    keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+}
+
+def signingValue = { String propertyName, String envName ->
+    def value = hasKeystoreProperties ? keystoreProperties.getProperty(propertyName) : null
+    if (value == null || value.trim().isEmpty()) {
+        value = System.getenv(envName)
+    }
+    return (value == null || value.trim().isEmpty()) ? null : value.trim()
+}
+
+def releaseStorePath = signingValue("storeFile", "GHOSTMESH_STORE_FILE")
+def releaseStorePassword = signingValue("storePassword", "GHOSTMESH_STORE_PASSWORD")
+def releaseKeyAlias = signingValue("keyAlias", "GHOSTMESH_KEY_ALIAS")
+def releaseKeyPassword = signingValue("keyPassword", "GHOSTMESH_KEY_PASSWORD")
+
+// Paths in keystore.properties are resolved against android/ (absolute paths win).
+def releaseKeystoreFile = releaseStorePath == null ? null : rootProject.file(releaseStorePath)
+if (releaseKeystoreFile != null && !releaseKeystoreFile.isFile()) {
+    throw new GradleException(
+            "Release keystore not found: ${releaseKeystoreFile}\n" +
+            "  Fix storeFile in android/keystore.properties (relative paths are resolved from android/),\n" +
+            "  or delete that file if you do not want to sign release builds yet. See android/RELEASE.md.")
+}
+
+def missingSigningValues = [
+        ["storeFile", releaseStorePath],
+        ["storePassword", releaseStorePassword],
+        ["keyAlias", releaseKeyAlias],
+        ["keyPassword", releaseKeyPassword]
+].findAll { it[1] == null }.collect { it[0] }
+
+def hasReleaseSigning = missingSigningValues.isEmpty()
+
+if (releaseKeystoreFile != null && !hasReleaseSigning) {
+    logger.lifecycle("NOTE: android/keystore.properties is incomplete (missing: " +
+            "${missingSigningValues.join(', ')}) — release builds will NOT be signed.")
+}
+
+// A release artifact without a signature is useless (Play Console rejects it),
+// so asking for one directly fails early with an actionable message instead of
+// silently producing app-release-unsigned.apk. Builds that merely *contain* the
+// release variant (e.g. `./gradlew build`) only warn, so compile checks still work.
+def releaseSigningTasks = ["assemblerelease", "bundlerelease", "installrelease", "publishrelease"]
+
+gradle.taskGraph.whenReady { taskGraph ->
+    def requestedDirectly = gradle.startParameter.taskNames
+            .collect { it.tokenize(":").last().toLowerCase() }
+            .find { releaseSigningTasks.contains(it) }
+
+    if (requestedDirectly != null && !hasReleaseSigning) {
+        throw new GradleException(
+                "Release signing is not configured, so ${requestedDirectly} would produce an unsigned\n" +
+                "artifact that Play Console rejects. Set up the upload key first:\n" +
+                "  1. Create an upload keystore (see android/RELEASE.md for details):\n" +
+                "       keytool -genkeypair -v -storetype PKCS12 -keystore ~/keystores/ghostmesh-upload.jks " +
+                "-alias ghostmesh-upload -keyalg RSA -keysize 2048 -validity 10000\n" +
+                "  2. cp keystore.properties.example keystore.properties   (from the android/ folder)\n" +
+                "  3. Re-run this task.\n" +
+                "Use ./gradlew assembleDebug if you just want an installable debug build.")
+    }
+
+    def buildsUnsignedRelease = !hasReleaseSigning &&
+            taskGraph.allTasks.any { releaseSigningTasks.contains(it.name.toLowerCase()) }
+    if (buildsUnsignedRelease) {
+        logger.lifecycle("WARNING: a release variant is being built without a signing config — " +
+                "the output will be unsigned. See android/RELEASE.md.")
+    }
+}
+
+android {
+    namespace "com.ghostmesh.app"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.ghostmesh.app"
+        minSdk 24          // WebRTC/WebView media capture + WebViewAssetLoader floor
+        targetSdk 35
+        // Bump ghostmesh.versionCode / versionName in android/gradle.properties
+        // for every Play upload (versionCode must strictly increase).
+        versionCode (project.findProperty("ghostmesh.versionCode") ?: "1").toString().toInteger()
+        versionName (project.findProperty("ghostmesh.versionName") ?: "1.0").toString()
+    }
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            release {
+                // This is the UPLOAD key: with Play App Signing enabled, Google
+                // holds the real app signing key and re-signs your upload.
+                storeFile releaseKeystoreFile
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            // R8/ProGuard stay off: the app is web code packaged in assets, so
+            // shrinking buys almost nothing but can break the WebView bridge.
+            minifyEnabled false
+            shrinkResources false
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        // MainActivity uses BuildConfig.DEBUG to enable WebView remote debugging.
+        buildConfig true
+    }
+}
+
+dependencies {
+    implementation "androidx.appcompat:appcompat:1.7.0"
+    implementation "androidx.core:core:1.13.1"
+    // WebViewAssetLoader: serves the web app from a real https:// origin, which
+    // is what the camera / microphone / QR scanning needs (file:// is not a
+    // secure context and blocks all of them).
+    implementation "androidx.webkit:webkit:1.12.1"
+}
+
+// Assets must exist before the APK's assets are merged.
+tasks.named("preBuild").configure { dependsOn(copyWebAssets) }
