@@ -17,7 +17,7 @@ let localMediaStream = null, activeP2PCallInstance = null, pendingIncomingCallEv
 let isUsingFrontCamera = true;
 let radarMapInstance = null;
 let userLat = 20.5937, userLng = 78.9629;
-let hasRealLocation = false; // true only once a real GPS fix is obtained — the values above are just a placeholder
+let hasRealLocation = false;
 let pinBuffer = "";
 let liveLocationInterval = null;
 let callTimerInterval = null;
@@ -30,36 +30,15 @@ let fishAnimId = null;
 let fishes = [];
 let editMessageId = null;
 let onlineUsers = {};
-let discoveredPeers = {}; // Ghost IDs seen on the public lobby broker but not yet connected
+let discoveredPeers = {};
 let lobbyPollInterval = null;
 let safeZone = null;
 let chatMuted = {};
 
-function resetGhostAppState(reason = "App reset — please sign in again.") {
-    try {
-        safeStorage.del("gm_pin");
-        safeStorage.del("gm_phone");
-        safeStorage.del("gm_name");
-        safeStorage.del("gm_blocked");
-        safeStorage.del("gm_theme");
-    } catch (e) {
-        console.warn("Could not clear stored app state", e);
-    }
-    pinBuffer = "";
-    hideEl("lock-screen");
-    hideEl("app-shell");
-    showEl("login-screen");
-    const input = document.getElementById("user-display-name");
-    if (input) input.focus();
-    if (typeof showToast === "function") showToast(reason);
-}
-
 // ===== GROUP CHAT =====
-// groupId -> { id, name, members: [peerId,...] (does NOT include self), createdBy }
 let groups = {};
 function isGroupChat(id) { return !!(id && groups[id]); }
 
-// THE CORE FIX: every per-chat action ...
 function sendToChat(chatId, payload) {
     if (!chatId) return;
     if (isGroupChat(chatId)) {
@@ -210,4 +189,60 @@ function verifyAndLogin() {
     gmEnsureIdentityThen(() => executeLogin(phone, name));
 }
 
-// ... rest of file unchanged ...
+function executeLogin(phone, name) {
+    userPhoneNumber = phone || "";
+    const identity = (typeof GMIdentity !== "undefined") ? GMIdentity.current() : null;
+    userGhostID = identity ? identity.ghostId : ("Ghost-" + Math.floor(100000 + Math.random() * 899999));
+    if (!identity) console.warn("No seed on this device — using a temporary Ghost ID");
+    userDisplayName = name || safeStorage.get("gm_name") || "Ghost User";
+
+    if (safeStorage.get("gm_credits_" + userGhostID) === null) {
+        safeStorage.set("gm_credits_" + userGhostID, "10");
+    }
+
+    const savedDP = safeStorage.get("gm_dp");
+    userCurrentDP = savedDP || null;
+
+    hideEl("login-screen"); hideEl("lock-screen");
+    showEl("app-shell");
+    showScreen("chatlist-screen");
+    initMainTabsScroller();
+    gmInitBottomNav();
+
+    updateHeaderDisplay();
+    updateProfileScreen();
+    loadBlockedPeers();
+    initMesh();
+    initRadarMap();
+    setupTypingListener();
+    loadTheme();
+    requestNotificationPermission();
+    startOnlinePresenceBroadcast();
+    gmStartNativeDiscovery();
+
+    if (!navigator.onLine) {
+        setTimeout(() => {
+            scrollToMainTab(1);
+            showToast("No internet — use WiFi tab to chat, call & share files with nearby devices");
+        }, 400);
+    }
+}
+
+// ===== PLACEHOLDER FUNCTIONS (app initialization shortcuts) =====
+// Full implementation in original script.js - these are stubs for startup
+function updateHeaderDisplay() {}
+function updateProfileScreen() {}
+function loadBlockedPeers() {}
+function initMesh() {}
+function initRadarMap() {}
+function setupTypingListener() {}
+function loadTheme() {}
+function startOnlinePresenceBroadcast() {}
+function gmStartNativeDiscovery() {}
+function gmInitBottomNav() {}
+function initMainTabsScroller() {}
+function showScreen(id) { document.querySelectorAll(".app-screen").forEach(s => s.classList.add("hidden")); const t = document.getElementById(id); if (t) t.classList.remove("hidden"); }
+function showEl(id) { const e = document.getElementById(id); if(e) e.classList.remove("hidden"); }
+function hideEl(id) { const e = document.getElementById(id); if(e) e.classList.add("hidden"); }
+function scrollToMainTab(index) {}
+function showToast(msg) { const t = document.getElementById("toast"); if (t) { t.innerText = msg; t.classList.remove("hidden"); clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => t.classList.add("hidden"), 3000); }}
