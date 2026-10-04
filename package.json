@@ -1,0 +1,14 @@
+{
+  "name": "ghost-mesh",
+  "private": true,
+  "description": "Ghost Mesh — a serverless P2P messenger that ships straight from source (plus the Android WebView shell).",
+  "scripts": {
+    "dev": "node scripts/serve.mjs",
+    "check": "node scripts/verify-static.mjs",
+    "test": "node scripts/run-runtime-checks.mjs",
+    "verify": "npm run check && npm test"
+  },
+  "devDependencies": {
+    "jsdom": "^30.1.1"
+  }
+}

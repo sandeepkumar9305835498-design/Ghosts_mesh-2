@@ -8,7 +8,7 @@
 //    never shipped, so install logged 404s for six files every time.
 // Network-first keeps the offline support while picking up changes instantly.
 
-const CACHE_NAME = "ghost-mesh-v16";
+const CACHE_NAME = "ghost-mesh-v17";
 
 const urlsToCache = [
   "./",

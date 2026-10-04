@@ -24,6 +24,7 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.EditText;
 import android.widget.Toast;
 
@@ -292,6 +293,12 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // The app puts a 12-word recovery phrase and private chats on screen.
+        // FLAG_SECURE blocks screenshots and screen recording, and keeps the
+        // content out of the recent-apps thumbnail. Without it any other app
+        // with screen-capture access could read the phrase off the display.
+        getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE,
+                WindowManager.LayoutParams.FLAG_SECURE);
         setContentView(R.layout.activity_main);
 
         assetLoader = new WebViewAssetLoader.Builder()

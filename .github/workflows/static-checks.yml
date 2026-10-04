@@ -1,8 +1,11 @@
-name: Static checks
+name: App checks
 
 # This project ships straight from source (no bundler, no build step), so these
-# cross-file checks are the whole automated gate. They are dependency-free and
-# finish in seconds, which is why they run on every push and pull request.
+# two suites are the whole automated gate:
+#   check — cross-file wiring (assets, handlers, ids, classes, CSS, pill nav)
+#   test  — boots the real page in jsdom and walks the runtime-only code paths
+# Both are fast, so they run on every push and pull request.
+
 on:
   push:
     branches: [main]
@@ -13,13 +16,18 @@ permissions:
   contents: read
 
 jobs:
-  static-checks:
-    name: Static checks
+  checks:
+    name: Static + runtime checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # jsdom 30 requires Node 22+; nothing else in the repo needs a toolchain.
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
-      - name: Verify static app wiring
-        run: node scripts/verify-static.mjs
+          node-version: "22"
+      - name: Install dev dependencies
+        run: npm install --no-audit --no-fund
+      - name: Cross-file wiring checks
+        run: npm run check
+      - name: Runtime checks (jsdom)
+        run: npm test
