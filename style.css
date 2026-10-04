@@ -13,7 +13,9 @@
     --accent-soft: rgba(155,89,247,0.12);
     --text: #f0eeff;
     --text2: #9b8ec4;
-    --text3: #6b5e8a;
+    /* Muted labels land on a 9-11px size range, so this must clear WCAG AA
+       (4.5:1) on every theme's background, not just the darkest one. */
+    --text3: #9184b5;
     --border: rgba(155,89,247,0.2);
     --border2: rgba(155,89,247,0.08);
     --msg-out: #3b1f7a;
@@ -491,6 +493,16 @@ body {
 }
 .empty-state h3 { font-size: 20px; color: var(--text); }
 .empty-state p { color: var(--text2); font-size: 14px; margin-bottom: 8px; }
+
+/* Search with no matches — same shape as .empty-state, lighter weight, and
+   hidden again as soon as a chat matches. */
+.search-empty {
+    display: flex; flex-direction: column;
+    align-items: center; gap: 6px;
+    padding: 36px 20px; text-align: center;
+}
+.search-empty h3 { font-size: 16px; color: var(--text); }
+.search-empty p { font-size: 13px; color: var(--text2); }
 
 .chat-item {
     display: flex;
@@ -1253,36 +1265,9 @@ body.theme-whatsapp .msg-tick.read {
     background: #000;
 }
 
-/* ===== WHATSAPP-STYLE MAIN TABS (Chats / WiFi / Online) ===== */
-.main-tabs-bar {
-    position: relative;
-    display: flex;
-    border-bottom: 1px solid var(--border2);
-    background: var(--bg2);
-    flex-shrink: 0;
-}
-.main-tab-btn {
-    flex: 1;
-    background: none;
-    border: none;
-    color: var(--text2);
-    padding: 13px 4px;
-    font-weight: 600;
-    font-size: 14px;
-    cursor: pointer;
-    transition: color 0.15s;
-}
-.main-tab-btn.active { color: var(--accent); }
-.main-tab-indicator {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    width: 50%; /* two tabs (Chats / WiFi) — JS keeps this in sync */
-    height: 3px;
-    background: var(--accent);
-    border-radius: 3px 3px 0 0;
-    transition: transform 0.25s ease;
-}
+/* ===== MAIN PANELS (Chats / WiFi) ===== */
+/* No top tab bar: the bottom pill nav is the only switcher, and the panels keep
+   the same horizontal swipe gesture. */
 /* Swipe physics: scroll-snap is deliberately OFF here — mandatory AND
    proximity both let a fast flick skip every intermediate panel and land on
    the last one, because a browser snap point always wins over momentum.
@@ -1444,21 +1429,8 @@ body.theme-whatsapp .msg-tick.read {
 .confirm-btn:active,
 .back-btn:active,
 .save-btn:active,
-.action-modal-btn:active,
-.main-tab-btn:active {
+.action-modal-btn:active {
     transform: scale(0.96);
-}
-
-/* The top tab bar keeps its look but shares the pill nav's motion language,
-   so the two nav bars read as one system. */
-.main-tab-btn {
-    transition: color 0.2s var(--gm-ease), transform 0.12s var(--gm-ease-in);
-}
-.main-tab-indicator {
-    height: 3px;
-    border-radius: 999px 999px 0 0;
-    box-shadow: 0 0 10px var(--accent-glow);
-    transition: transform 0.32s var(--gm-ease);
 }
 
 /* ---- Consistency ---------------------------------------------------- */
@@ -1476,6 +1448,15 @@ input:focus:not(:focus-visible),
 textarea:focus:not(:focus-visible),
 select:focus:not(:focus-visible) {
     outline: none;
+}
+
+/* Pointer ergonomics: touch devices already get :active feedback; a mouse or
+   trackpad gets a gentle hover instead of nothing at all. */
+@media (hover: hover) and (pointer: fine) {
+    .primary-btn:hover, .confirm-btn:hover, .secondary-btn:hover, .danger-btn-full:hover { filter: brightness(1.08); }
+    .settings-row:hover, .premium-plan-btn:hover, .send-credit-amount-btn:hover { background: var(--accent-soft); }
+    .premium-plan-btn:hover { border-color: var(--accent); }
+    .gm-nav-item:hover { color: var(--accent); }
 }
 
 /* Motion is decoration here — honour the OS setting. */
@@ -1874,23 +1855,23 @@ select:focus:not(:focus-visible) {
 /* ===================================================================
    WATCH-AD SIMULATION OVERLAY
 =================================================================== */
-.watch-ad-overlay {
-    position: fixed; inset: 0;
-    background: rgba(0,0,0,0.85);
-    z-index: 9999;
-    display: flex; align-items: center; justify-content: center;
+/* SETTINGS SHEET — real destinations only, no "coming soon" rows */
+.settings-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.settings-row {
+    display: flex; align-items: center; gap: 12px;
+    width: 100%; text-align: left;
+    background: var(--surface2, rgba(255,255,255,0.04));
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 11px 12px;
+    color: var(--text);
+    cursor: pointer;
 }
-.watch-ad-overlay.hidden { display: none; }
-.watch-ad-box { text-align: center; color: #fff; }
-.watch-ad-spinner {
-    width: 48px; height: 48px;
-    border: 4px solid rgba(255,255,255,0.2);
-    border-top-color: var(--accent, #9b59f7);
-    border-radius: 50%;
-    margin: 0 auto 14px;
-    animation: watch-ad-spin 0.8s linear infinite;
-}
-@keyframes watch-ad-spin { to { transform: rotate(360deg); } }
+.settings-row svg { flex: 0 0 auto; color: var(--accent); }
+.settings-row:active { transform: scale(0.98); }
+.settings-row-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.settings-row-title { font-size: 14px; font-weight: 600; }
+.settings-row-sub { font-size: 11px; color: var(--text3); }
 
 /* ===================================================================
    CREDITS PILL (top bar, next to 3-dot menu)
@@ -1948,7 +1929,7 @@ select:focus:not(:focus-visible) {
 .premium-plan-btn .plan-badge {
     position: absolute; top: -9px; left: 50%; transform: translateX(-50%);
     background: var(--accent); color: #fff;
-    font-size: 9px; font-weight: 700;
+    font-size: 10px; font-weight: 700;
     padding: 2px 8px; border-radius: 8px;
     white-space: nowrap;
 }
@@ -2137,6 +2118,15 @@ select:focus:not(:focus-visible) {
     font-size: 12px; color: var(--text3); line-height: 1.5;
     padding: 8px 12px 14px; text-align: center;
 }
+/* The Online screen (nav item 3): a plain scrollable column that hosts the one
+   reachable-ghosts list. */
+.online-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 14px 0 24px;
+    -webkit-overflow-scrolling: touch;
+}
+.online-hint { padding: 0 16px; margin-bottom: 12px; line-height: 1.5; }
 .reach-section {
     margin: 4px 12px 18px;
     background: var(--bg2);
@@ -2304,4 +2294,145 @@ select:focus:not(:focus-visible) {
     display: flex; align-items: flex-start; gap: 6px;
     font-size: 10.5px; color: var(--text3); line-height: 1.5;
     margin: 12px 0 0;
+}
+
+/* ===================================================================
+   SETTINGS SHEET — identity header (avatar + name + Ghost ID) on top,
+   every option as its own row below. The sheet scrolls on small phones.
+=================================================================== */
+.settings-box {
+    max-width: 360px;
+    max-height: 88vh;
+    overflow-y: auto;
+    text-align: left;
+}
+.settings-head {
+    display: flex; align-items: center; gap: 12px;
+    width: 100%; text-align: left;
+    font-family: inherit;
+    background: var(--accent-soft);
+    border: 1px solid var(--border2);
+    border-radius: 16px;
+    padding: 12px;
+    color: var(--text);
+    cursor: pointer;
+}
+.settings-head:active { transform: scale(0.98); }
+.settings-head .default-avatar.big { width: 56px; height: 56px; border-width: 2px; }
+.settings-head-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.settings-head-name {
+    font-size: 16px; font-weight: 700; color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.settings-head-id {
+    font-size: 12px; font-weight: 600; color: var(--accent);
+    overflow-wrap: anywhere;
+}
+.settings-head-chevron { color: var(--text3); flex: 0 0 auto; }
+.settings-title {
+    font-size: 11px; font-weight: 700; color: var(--text3);
+    text-transform: uppercase; letter-spacing: 0.9px;
+    margin: 18px 2px 0;
+}
+.settings-row.settings-danger { border-color: rgba(255, 90, 90, 0.35); }
+.settings-row.settings-danger svg { color: var(--danger); }
+.settings-row.settings-danger .settings-row-title { color: var(--danger); }
+.settings-row-state { font-weight: 700; }
+.settings-row-state.on { color: var(--accent); }
+
+/* ===================================================================
+   APP LOCK (Settings) — set / change / remove the 4-digit PIN. The dots
+   and keypad are the lock screen's own classes, sized down a notch so
+   the whole flow fits (and scrolls) on a short phone screen.
+=================================================================== */
+.app-lock-box { max-height: 90vh; overflow-y: auto; }
+.app-lock-box .pin-dots { margin: 14px 0 6px; }
+.app-lock-box .numpad { margin-top: 12px; }
+.app-lock-box .numpad button { min-height: 52px; font-size: 20px; }
+.app-lock-danger { color: var(--danger); border-color: rgba(255, 90, 90, 0.35); }
+
+/* ===================================================================
+   PROFILE — Instagram-style layout on a true-black canvas: gradient
+   avatar ring, name + Ghost ID chip, stats row, actions, then the
+   editable details. Always black, whatever chat theme is active.
+=================================================================== */
+#profile-screen.profile-insta { background: #000; }
+#profile-screen .app-header {
+    background: #000;
+    border-bottom-color: #1e1e21;
+    box-shadow: none;
+}
+#profile-screen .app-header .header-title { color: #fff; }
+#profile-screen .app-header .back-btn { color: #fff; }
+.profile-insta-badge { display: flex; align-items: center; color: #3a3a3f; margin-right: 4px; }
+#profile-screen .profile-content {
+    background: #000;
+    color: #fff;
+    padding-top: 18px;
+}
+.profile-avatar-ring {
+    width: 118px; height: 118px;
+    border-radius: 50%;
+    padding: 3px;
+    background: linear-gradient(45deg, #f9ce34, #ee2a7b, #6228d7);
+    display: flex; align-items: center; justify-content: center;
+}
+.profile-avatar-ring .default-avatar.big {
+    width: 106px; height: 106px;
+    border: 3px solid #000;
+    box-shadow: none;
+    background: #141416;
+}
+#profile-screen .dp-edit-btn { background: #232327; color: #fff; bottom: -4px; }
+.profile-display-name {
+    font-size: 20px; font-weight: 700; color: #fff;
+    margin: 4px 0 0; text-align: center;
+}
+.profile-id-chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: inherit;
+    background: #141416;
+    border: 1px solid #26262a;
+    border-radius: 20px;
+    color: #d8d8dd;
+    font-size: 12.5px; font-weight: 600;
+    padding: 7px 14px;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+}
+.profile-id-chip:active { transform: scale(0.97); }
+.profile-id-chip svg { color: #8e8e93; flex: 0 0 auto; }
+.profile-stats { display: flex; width: 100%; max-width: 320px; margin-top: 8px; }
+.profile-stat { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.profile-stat b { font-size: 17px; font-weight: 800; color: #fff; }
+.profile-stat span { font-size: 11px; color: #8e8e93; }
+.profile-action-row { display: flex; gap: 8px; width: 100%; max-width: 320px; margin-top: 6px; }
+.profile-action-btn {
+    flex: 1;
+    background: #1c1c1f;
+    border: 1px solid #2c2c30;
+    border-radius: 10px;
+    color: #fff;
+    font-size: 13px; font-weight: 600;
+    padding: 10px 8px;
+    cursor: pointer;
+    min-height: 42px;
+}
+.profile-action-btn:active { transform: scale(0.97); }
+#profile-screen .profile-info-box { background: #0e0e10; border-color: #232326; }
+#profile-screen .profile-field { border-bottom-color: #1d1d20; }
+#profile-screen .profile-field label { color: #8e8e93; }
+#profile-screen .field-value { color: #e7e7ec; }
+#profile-screen .profile-input,
+#profile-screen .profile-select {
+    background: #141416;
+    border-color: #2a2a2e;
+    color: #fff;
+}
+#profile-screen .credits-card { background: #0e0e10; border-color: #232326; }
+.profile-foot-note {
+    font-size: 11px; color: #6f6f75;
+    text-align: center; line-height: 1.5;
+    max-width: 300px; margin: 4px 0 0;
 }

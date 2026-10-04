@@ -73,6 +73,42 @@ const safeStorage = {
     del(k){ if(this._ok){ try{ localStorage.removeItem(k); return; }catch(e){} } delete this._memory[k]; }
 };
 
+// ===== LAZY VENDOR LIBRARIES =====
+// These four used to load in <head> on every launch — three.min.js (603 KB),
+// jsQR (257 KB), leaflet (148 KB), qrcode (20 KB), roughly 1 MB that had to be
+// downloaded, parsed and executed before first paint even though most sessions
+// never open the fish theme, the radar map or the scanner. On a mid-range
+// Android phone that was the single biggest startup cost in the app.
+//
+// They now load on first use (still local/cached files — the service worker
+// precaches all of them, so offline still works after one visit).
+const gmLibSrc = {
+    three: "three.min.js",
+    jsqr: "jsQR.js",
+    leaflet: "leaflet.js",
+    qrcode: "qrcode.min.js"
+};
+const gmLibReady = {};
+function gmEnsureLib(name) {
+    if (gmLibReady[name]) return gmLibReady[name];
+    const src = gmLibSrc[name];
+    if (!src) return Promise.resolve(false);
+    gmLibReady[name] = new Promise(resolve => {
+        const s = document.createElement("script");
+        s.src = src;
+        s.async = true;
+        s.onload = () => resolve(true);
+        s.onerror = () => {
+            // warn, not error: a failed optional library must never trip the
+            // global crash guard or the debug console's error filter.
+            console.warn("Ghost Mesh could not load " + src);
+            resolve(false);
+        };
+        document.head.appendChild(s);
+    });
+    return gmLibReady[name];
+}
+
 // ===== GLOBAL CRASH GUARD =====
 // A single unexpected error anywhere (a null element, a bad message,
 // a WebRTC hiccup) should never freeze or white-screen the whole app.
@@ -197,12 +233,11 @@ function verifyAndLogin() {
     const name = document.getElementById("user-display-name").value.trim();
     const phoneEl = document.getElementById("phone-number");
     const phone = phoneEl ? phoneEl.value.trim() : "";
-    const pin = document.getElementById("set-pin-input").value.trim();
     if (!name) { showToast("Enter the name your contacts will see"); return; }
     // The phone number is optional and is NEVER used to build the Ghost ID —
     // that comes from the random seed, so nothing personal is guessable.
     if (phone && phone.replace(/\D/g, "").length < 6) { showToast("That phone number looks incomplete"); return; }
-    if (pin.length === 4) safeStorage.set("gm_pin", pin);
+    // The app lock (gm_pin) is set up later from Settings, never at signup.
     if (phone) safeStorage.set("gm_phone", phone); else safeStorage.del("gm_phone");
     safeStorage.set("gm_name", name);
     // Creates the seed on first run and shows the mandatory recovery phrase.
@@ -237,7 +272,11 @@ function executeLogin(phone, name) {
     updateProfileScreen();
     loadBlockedPeers();
     initMesh();
-    initRadarMap();
+    // The radar map is deliberately NOT initialised here any more: it used to
+    // build a hidden Leaflet map at every login, which fired off OpenStreetMap
+    // tile requests the user never asked for (bandwidth, battery, and an IP +
+    // approximate-area leak before they ever opened the map). It now initialises
+    // the first time the map is actually opened — see toggleRadarMap().
     setupTypingListener();
     loadTheme();
     requestNotificationPermission();
@@ -276,7 +315,18 @@ function updateProfileScreen() {
     if (gid) gid.innerText = userGhostID;
     const ph = document.getElementById("profile-phone");
     if (ph) ph.innerText = userPhoneNumber || "not set (optional)";
+    const nameDisplay = document.getElementById("profile-name-display");
+    if (nameDisplay) nameDisplay.innerText = userDisplayName || "Ghost";
+    // Instagram-style stats row: chats on this device, credits, and the P2P
+    // connections that are open right now.
+    const statChats = document.getElementById("profile-stat-chats");
+    if (statChats) statChats.innerText = Object.keys(chatData || {}).length;
+    const statCredits = document.getElementById("profile-stat-credits");
+    if (statCredits) statCredits.innerText = getCredits();
+    const statConns = document.getElementById("profile-stat-connections");
+    if (statConns) statConns.innerText = (activeConnections || []).filter(c => c && c.open).length;
     setAvatarDisplay("profile-avatar-big", userCurrentDP);
+    gmSyncSettingsHeader();
     renderCreditsUI();
 }
 
@@ -293,15 +343,16 @@ function setAvatarDisplay(elId, dpData) {
 function logoutApp() {
     closeAllMenus();
     const hasSeed = (typeof GMIdentity !== "undefined") && GMIdentity.exists();
-    const msg = hasSeed
-        ? "Log out of Ghost Mesh?\n\nYour Ghost ID and its 12-word recovery phrase stay on this device, so you can log back in without them."
-        : "Log out of Ghost Mesh?";
-    if (!confirm(msg)) return;
+    const detail = hasSeed
+        ? "Your Ghost ID and its 12-word recovery phrase stay on this device, so you can log back in without them."
+        : "You can log back in any time with your recovery phrase.";
     // The seed is the identity — logging out must NOT throw it away. Only the
     // device-local profile (name/phone/PIN) is cleared.
-    gmStopNativeDiscovery();
-    safeStorage.del("gm_phone"); safeStorage.del("gm_pin"); safeStorage.del("gm_name");
-    location.reload();
+    gmConfirm("Log out of Ghost Mesh? " + detail, () => {
+        gmStopNativeDiscovery();
+        safeStorage.del("gm_phone"); safeStorage.del("gm_pin"); safeStorage.del("gm_name");
+        location.reload();
+    }, { title: "Log out", confirmLabel: "Log out" });
 }
 
 // ===== SCREENS =====
@@ -309,7 +360,7 @@ function logoutApp() {
 // Android convention — while the root screen cross-fades. Both animations are
 // pure CSS (see the POLISH PASS block in style.css) and are skipped entirely
 // when the OS asks for reduced motion.
-const GM_PUSH_SCREENS = { "chat-screen": true, "profile-screen": true, "theme-screen": true };
+const GM_PUSH_SCREENS = { "chat-screen": true, "profile-screen": true, "theme-screen": true, "online-screen": true };
 const GM_SCREEN_ANIM_MS = 340;
 // BOTH the element and its class are remembered: navigating again before the
 // timer fires used to orphan the class on the previous screen (leaving it stuck
@@ -371,10 +422,11 @@ function gmScrollContainerTo(el, left) {
     el.scrollLeft = left;
 }
 
-// ===== MAIN TABS (Chats / WiFi) =====
-// The separate "Online" tab is gone: online peers now live in the Chats tab's
-// "Online Nearby" list and in the WiFi tab's "Ghosts You Can Reach" list, both
-// rendered from the same shared function so they can never disagree.
+// ===== MAIN PANELS (Chats / WiFi) =====
+// Two panels only: Chats (conversations) and WiFi (pairing + reachable ghosts).
+// The reachable-peer list lives in the WiFi panel alone — one list, one place to
+// keep correct. There is no tab bar any more: the bottom pill nav switches
+// panels (gmNavGo → scrollToMainTab) and the panels still swipe horizontally.
 const GM_TABS = ["Chats", "WiFi"];
 
 function scrollToMainTab(index) {
@@ -389,19 +441,19 @@ function scrollToMainTab(index) {
 
 function setActiveMainTab(index) {
     const clamped = Math.max(0, Math.min(GM_TABS.length - 1, index));
-    GM_TABS.forEach((_, i) => {
-        document.getElementById("main-tab-btn-" + i)?.classList.toggle("active", i === clamped);
-    });
-    const indicator = document.getElementById("main-tab-indicator");
-    if (indicator) {
-        indicator.style.width = (100 / GM_TABS.length) + "%";
-        indicator.style.transform = `translateX(${clamped * 100}%)`;
-    }
-    // Keep the bottom pill nav's highlight in step with the tab bar. This runs
+    // The top tab bar is gone (the pill nav did the same job twice), so the
+    // scroller itself carries the state — one place to read it from, for the
+    // swipe handler, the nav and the tests.
+    const scroller = document.getElementById("main-tabs-scroller");
+    if (scroller) scroller.dataset.activeTab = String(clamped);
+    // Keep the bottom pill nav's highlight in step with the panel. This runs
     // on every scroll tick, so gmSetBottomNavActive() bails out early when the
     // answer has not changed instead of touching the DOM each time.
     gmSetBottomNavActive(clamped === 1 ? "wifi" : "chats", true);
-    // Both tabs show reachable peers, so refresh whichever is on screen.
+    // Discovery keeps changing while the app sits open, so the Online screen's
+    // list is refreshed on every panel change instead of waiting for the next
+    // discovery event (it renders into a hidden screen — cheap, and always fresh
+    // by the time the user opens it).
     renderPeerLists();
 }
 
@@ -453,11 +505,12 @@ function initMainTabsScroller() {
 }
 
 // ===== BOTTOM FLOATING PILL NAV =====
-// The swipeable tab bar at the top is untouched — this is a second, faster way
-// to reach the same places (plus "New connection" and the profile). Both stay
-// in agreement because the tab bar drives the highlight through
-// setActiveMainTab(), and this drives the tab bar through showScreen().
-const GM_NAV_SCREENS = { "chatlist-screen": true, "profile-screen": true };
+// The pill nav is the only nav bar (the top tab bar was removed as a duplicate):
+// Chats, WiFi, Online, with Settings last. The two panels are swiped horizontally
+// and their scroll position drives the highlight through setActiveMainTab().
+// Profile is a sub-screen reached from Settings (or the header avatar), so this
+// still includes it — the nav stays visible there.
+const GM_NAV_SCREENS = { "chatlist-screen": true, "profile-screen": true, "online-screen": true };
 let gmNavActiveKey = "";
 let gmNavReady = false;
 
@@ -484,7 +537,9 @@ function gmSyncBottomNav(screenId) {
     const visible = GM_NAV_SCREENS[screenId] === true;
     gmSetBottomNavVisible(visible);
     if (!visible) return;
-    if (screenId === "profile-screen") gmSetBottomNavActive("profile", true);
+    // Profile keeps whatever was highlighted (it is entered from Settings, like
+    // the settings sheet itself); Online is a real destination of its own.
+    if (screenId === "online-screen") gmSetBottomNavActive("online", true);
     gmMoveNavPill(true);
 }
 
@@ -535,25 +590,60 @@ function gmMoveNavPill(animate) {
 // can never drift apart (and the markup stays free of class juggling).
 function gmNavGo(key) {
     closeAllMenus();
+    if (key === "online") { openOnlineUsers(); return; }
+    // "profile" is no longer a nav item, but the key stays supported so saved
+    // shortcuts / the header menu can still route through one entry point.
     if (key === "profile") { openProfile(); return; }
-    if (key === "connect") { openNewConnect(); return; }
+    if (key === "settings") {
+        // A sheet, not a screen, so the highlight deliberately stays on the tab
+        // the user came from instead of parking on "Settings" behind a modal.
+        openSettingsSheet();
+        return;
+    }
     showScreen("chatlist-screen", key === "wifi" ? 1 : 0);
 }
 
-function openProfile() { closeAllMenus(); updateProfileScreen(); showScreen("profile-screen"); }
-function closeProfile() { showScreen("chatlist-screen"); }
-function openThemePicker() { closeAllMenus(); buildThemeGrid(); showScreen("theme-screen"); }
-function openOnlineUsers() {
-    // "Nearby Ghosts" now lives inside the Chats tab — no third tab to switch to.
+// Profile and Chat Themes are entered from the Settings sheet now, so their
+// back button returns there instead of dumping the user on the chat list.
+// A direct entry (the header avatar) still goes back to the chat list.
+let gmProfileOpenedFrom = "";
+let gmThemeOpenedFrom = "";
+function openProfile(from) {
     closeAllMenus();
-    showScreen("chatlist-screen");
-    scrollToMainTab(0);
-    const section = document.getElementById("nearby-section");
-    if (section) {
-        section.classList.add("flash");
-        setTimeout(() => section.classList.remove("flash"), 900);
-    }
+    gmProfileOpenedFrom = from === "settings" ? "settings" : "chats";
+    updateProfileScreen();
+    showScreen("profile-screen");
 }
+function closeProfile() {
+    const backToSettings = gmProfileOpenedFrom === "settings";
+    gmProfileOpenedFrom = "";
+    showScreen("chatlist-screen");
+    if (backToSettings) openSettingsSheet();
+}
+function openThemePicker(from) {
+    closeAllMenus();
+    gmThemeOpenedFrom = from === "settings" ? "settings" : "chats";
+    buildThemeGrid();
+    showScreen("theme-screen");
+}
+function closeThemePicker() {
+    const backToSettings = gmThemeOpenedFrom === "settings";
+    gmThemeOpenedFrom = "";
+    showScreen("chatlist-screen");
+    if (backToSettings) openSettingsSheet();
+}
+// Settings-sheet entry points: close the sheet first, then push the screen.
+function gmOpenProfileFromSettings() { closeSettingsSheet(); openProfile("settings"); }
+function gmOpenThemeFromSettings() { closeSettingsSheet(); openThemePicker("settings"); }
+// The reachable/online ghosts list has exactly one home: the Online screen.
+// It used to live inside the WiFi panel (and, before that, a second copy under
+// the chat list), while the nav had a Profile slot — that slot is now Online.
+function openOnlineUsers() {
+    closeAllMenus();
+    renderPeerLists();
+    showScreen("online-screen");
+}
+function closeOnlineScreen() { showScreen("chatlist-screen"); }
 // ===== LOBBY DISCOVERY =====
 // No dedicated backend: PeerJS's own free cloud broker (the same one myPeerInstance
 // already talks to for signaling) exposes a "who's currently connected" list for its
@@ -638,6 +728,15 @@ function copyGhostID() {
 
 function triggerDPUpload() { document.getElementById("dp-file-input").click(); }
 
+// "Edit Name" in the Instagram-style hero scrolls to (and focuses) the name
+// input in the details card below.
+function focusProfileName() {
+    const el = document.getElementById("profile-name-input");
+    if (!el) return;
+    try { el.focus({ preventScroll: true }); } catch (e) { try { el.focus(); } catch (e2) {} }
+    try { el.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (e) { try { el.scrollIntoView(); } catch (e2) {} }
+}
+
 function handleDPChange(event) {
     const file = event.target.files[0]; if (!file) return;
     const reader = new FileReader();
@@ -710,10 +809,23 @@ function applyTheme(themeId) {
     currentTheme = themeId;
     safeStorage.set("gm_theme", themeId);
     if (themeId !== "default") document.body.classList.add("theme-" + themeId);
+    gmSyncThemeColor(themeId);
     if (themeId === "fish") startFishAnimation();
     else stopFishAnimation();
     buildThemeGrid();
     showToast("Theme applied!");
+}
+
+// Android paints the status bar and the task switcher card with the page's
+// theme-color. It was hard-coded purple, so every other theme left a purple
+// status bar over, say, a green app. Each theme's swatch in `themes` is already
+// the same value as its CSS --accent (a static check keeps them in sync).
+function gmSyncThemeColor(themeId) {
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (!meta) return;
+    const t = themes.find(x => x.id === themeId);
+    const hex = t && /^#[0-9a-fA-F]{6}$/.test(t.bg || "") ? t.bg : "#9b59f7";
+    meta.setAttribute("content", hex);
 }
 
 function loadTheme() {
@@ -722,13 +834,43 @@ function loadTheme() {
 }
 
 // ===== 3D FISH ANIMATION (Three.js) =====
-function startFishAnimation() {
+async function startFishAnimation() {
     const wrap = document.getElementById("fish-canvas-wrap");
     const canvas = document.getElementById("fish-canvas");
-    if (!wrap || !canvas || typeof THREE === "undefined") return;
-    wrap.classList.remove("hidden");
+    if (!wrap || !canvas) return;
+    // three.js is lazy-loaded; the WebGL scene only starts once it lands.
+    if (typeof THREE === "undefined") {
+        const ok = await gmEnsureLib("three");
+        // The theme may have changed while the library was loading.
+        if (!ok || typeof THREE === "undefined") {
+            if (currentTheme === "fish") {
+                showToast("Live theme could not load — switched back");
+                applyTheme("default");
+            }
+            return;
+        }
+        if (currentTheme !== "fish") return;
+    }
+    // Some low-end Android WebViews ship with WebGL disabled or blocklisted.
+    // Constructing the renderer then throws, and because this function runs
+    // after an await that error surfaced as an unhandled rejection — the theme
+    // looked frozen instead of falling back. Check up front instead.
+    let renderer = null;
+    try {
+        renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+    } catch (e) {
+        renderer = null;
+    }
+    if (!renderer) {
+        console.warn("Ghost Mesh: the live theme needs WebGL");
+        if (currentTheme === "fish") {
+            showToast("Live theme needs WebGL — switched back");
+            applyTheme("default");
+        }
+        return;
+    }
 
-    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+    wrap.classList.remove("hidden");
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setClearColor(0x0a1a2a, 0.85);
 
@@ -1114,9 +1256,9 @@ function setupConn(conn) {
             case "credit-gift": {
                 addCredits(data.amount || 0);
                 if (chatData[data.sender]) {
-                    addSystemMsg(data.sender, `👻 ${data.senderName || data.sender} sent you ${data.amount} credits!`);
+                    addSystemMsg(data.sender, `${data.senderName || data.sender} sent you ${data.amount} credits!`);
                 }
-                showToast(`👻 +${data.amount} credits from ${data.senderName || data.sender}!`);
+                showToast(`+${data.amount} credits from ${data.senderName || data.sender}`);
                 break;
             }
             case "location": {
@@ -1245,14 +1387,16 @@ function gmReachablePeers() {
     return Array.from(ids);
 }
 
-// Single shared renderer: the Chats tab's "Online Nearby" list and the WiFi
-// tab's "Ghosts You Can Reach" list are both drawn by this, so they always
-// show the same peers and the same state.
+// Shared renderer for every reachable-peer list. The WiFi tab's Ghosts You Can
+// Reach" card is the single home for it now, so there is one list to keep
+// correct instead of two copies that could drift apart.
 function renderPeopleListInto(containerId, peers) {
     const list = document.getElementById(containerId);
     if (!list) return 0;
     if (!peers.length) {
-        list.innerHTML = '<div class="peer-empty">Nobody reachable yet — open WiFi tab to pair with a nearby Ghost.</div>';
+        // This list lives on the WiFi tab now, so the hint has to describe the
+        // pairing actions on THIS screen instead of sending the user elsewhere.
+        list.innerHTML = '<div class="peer-empty">Nobody reachable yet — show your QR, or scan a friend\'s to pair.</div>';
         return 0;
     }
     list.innerHTML = "";
@@ -1287,16 +1431,13 @@ function renderPeopleListInto(containerId, peers) {
     return peers.length;
 }
 
-// Draws BOTH lists and updates their counters.
+// Draws the reachable list and updates its counter (the Online screen).
 function renderPeerLists() {
     const peers = gmReachablePeers();
-    renderPeopleListInto("nearby-ghosts-list", peers);
-    renderPeopleListInto("wifi-reach-list", peers);
+    renderPeopleListInto("online-reach-list", peers);
     const n = peers.length;
-    const a = document.getElementById("nearby-count");
-    const b = document.getElementById("wifi-reach-count");
-    if (a) a.innerText = n;
-    if (b) b.innerText = n;
+    const counter = document.getElementById("online-reach-count");
+    if (counter) counter.innerText = n;
     return n;
 }
 
@@ -1385,11 +1526,13 @@ function leaveCurrentGroup() {
     closeAllMenus();
     if (!isGroupChat(currentChatPeer)) return;
     const groupId = currentChatPeer;
-    if (!confirm(`Leave "${groups[groupId].name}"?`)) return;
-    delete groups[groupId];
-    delete chatData[groupId];
-    goBackToList();
-    showToast("Left group");
+    const leaveName = groups[groupId].name;
+    gmConfirm(`Leave "${leaveName}"? The chat disappears from your list.`, () => {
+        delete groups[groupId];
+        delete chatData[groupId];
+        goBackToList();
+        showToast("Left group");
+    }, { title: "Leave group", confirmLabel: "Leave" });
 }
 function closeNewConnect() { hideEl("connect-modal"); document.getElementById("peer-id-input").value = ""; }
 
@@ -1598,8 +1741,21 @@ function wrapOfflineChannel(dc, peerId) {
     return wrapped;
 }
 
-function renderOfflineQR(elId, payloadObj) {
+async function renderOfflineQR(elId, payloadObj) {
     const container = document.getElementById(elId);
+    if (!container) return;
+    // qrcode.min.js is lazy-loaded, and scanning someone's QR can be the very
+    // first thing a session does — so the reply QR must load the library itself
+    // instead of assuming a caller already did (that used to fall into the
+    // "QR too large" catch below, which was plain wrong).
+    if (typeof QRCode === "undefined") {
+        const ok = await gmEnsureLib("qrcode");
+        if (!ok || typeof QRCode === "undefined") {
+            container.innerHTML = "";
+            showToast("QR library could not load — check your connection once");
+            return;
+        }
+    }
     container.innerHTML = "";
     const text = JSON.stringify(payloadObj);
     container.dataset.rawPayload = text;
@@ -1610,18 +1766,16 @@ function renderOfflineQR(elId, payloadObj) {
             height: 260,
             correctLevel: QRCode.CorrectLevel.L
         });
-        // Same-device testing (two browser tabs/windows) makes camera
-        // scanning genuinely hard — laptop webcams especially struggle to
-        // focus that close on another screen. A one-tap "copy code" lets
-        // testers skip the camera entirely and paste it on the other side.
-        // Each render used to append another copy button, so they piled up
-        // under the QR after every retry.
+        // A one-tap "copy pairing code" for when pointing a camera at
+        // another screen is impractical (laptop webcam, broken camera, screen
+        // reader). Each render used to append another copy button, so they
+        // piled up under the QR after every retry.
         container.parentElement.querySelectorAll(".qr-copy-code-btn").forEach(b => b.remove());
         const copyBtn = document.createElement("button");
         copyBtn.className = "qr-copy-code-btn";
-        copyBtn.innerText = "📋 Copy code (for testing without camera)";
+        copyBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/></svg> Copy pairing code';
         copyBtn.onclick = () => {
-            navigator.clipboard?.writeText(text).then(() => showToast("Code copied — paste it on the other device"));
+            navigator.clipboard?.writeText(text).then(() => showToast("Pairing code copied — paste it on the other device"));
         };
         container.parentElement.appendChild(copyBtn);
     } catch (e) {
@@ -1637,19 +1791,81 @@ function renderOfflineQR(elId, payloadObj) {
     }
 }
 
-// Manual fallback for when camera scanning isn't working/available — lets
-// testers paste the raw code (copied via the "📋 Copy code" button on the
-// other device) instead of relying on the camera at all.
+// Manual fallback for when camera scanning isn't possible — opens the app's
+// own paste sheet instead of a browser prompt, so the flow stays in-brand and
+// no system dialog prints the page origin above the text.
 function pasteCodeManually() {
-    const text = prompt("Paste the code you copied from the other device:");
-    if (!text || !text.trim()) return;
-    if (typeof window.__qrManualDecodeHandler === "function") {
-        Promise.resolve(window.__qrManualDecodeHandler(text.trim())).then(ok => {
-            if (!ok) showToast("Invalid code — check you copied the whole thing");
-        });
-    } else {
+    const modal = document.getElementById("gm-paste-modal");
+    const input = document.getElementById("gm-paste-input");
+    if (!modal || !input) return;
+    input.value = "";
+    modal.classList.remove("hidden");
+    setTimeout(() => input.focus(), 60);
+}
+function gmClosePasteModal() { hideEl("gm-paste-modal"); }
+function gmSubmitPasteCode() {
+    const input = document.getElementById("gm-paste-input");
+    const text = (input && input.value ? input.value : "").trim();
+    if (!text) { showToast("Paste the code first"); return; }
+    if (typeof window.__qrManualDecodeHandler !== "function") {
         showToast("Nothing is waiting for a code right now");
+        return;
     }
+    hideEl("gm-paste-modal");
+    Promise.resolve(window.__qrManualDecodeHandler(text)).then(ok => {
+        if (!ok) showToast("Invalid code — check you copied the whole thing");
+    });
+}
+
+// Decode a QR from a screenshot or photo. Same jsQR pass as the camera loop,
+// downscaled first so a 12-megapixel photo can't stall the main thread.
+function scanQrFromImage() {
+    const picker = document.getElementById("gm-qr-image-input");
+    if (!picker) return;
+    picker.value = "";
+    picker.click();
+}
+async function gmHandleQrImage(event) {
+    // Read the File before awaiting anything — the picker's FileList is only
+    // valid inside the original event handler.
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    if (typeof jsQR === "undefined") {
+        const ok = await gmEnsureLib("jsqr");
+        if (!ok || typeof jsQR === "undefined") {
+            showToast("Scanner could not load — try again once online");
+            return;
+        }
+    }
+    const handler = window.__qrManualDecodeHandler;
+    if (typeof handler !== "function") { showToast("Nothing is waiting for a code right now"); return; }
+    const reader = new FileReader();
+    reader.onload = e => {
+        const img = new Image();
+        img.onload = () => {
+            try {
+                const scale = Math.min(1, 1200 / Math.max(img.naturalWidth, img.naturalHeight, 1));
+                const canvas = document.createElement("canvas");
+                canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+                canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+                const ctx = canvas.getContext("2d", { willReadFrequently: true });
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const code = jsQR(data.data, data.width, data.height, { inversionAttempts: "attemptBoth" });
+                if (!code || !code.data) { showToast("No QR code found in that image"); return; }
+                Promise.resolve(handler(code.data)).then(ok => {
+                    if (!ok) showToast("Invalid QR — try another image");
+                });
+            } catch (err) {
+                console.error(err);
+                showToast("Could not read that image");
+            }
+        };
+        img.onerror = () => showToast("Could not open that image");
+        img.src = e.target.result;
+    };
+    reader.onerror = () => showToast("Could not read that file");
+    reader.readAsDataURL(file);
 }
 
 // ----- HOST (creator) side -----
@@ -1657,8 +1873,13 @@ async function startOfflineHost() {
     gmCloseOfflineFlowSoonIfIdle();
     showEl("offline-flow-wrap");
     if (typeof QRCode === "undefined") {
-        showToast("QR library not loaded — connect to internet once, then this works offline forever after");
-        return;
+        // Lazy-loaded on first use; the file is local (and service-worker
+        // cached), so this is a one-off wait rather than a download.
+        const libOk = await gmEnsureLib("qrcode");
+        if (!libOk || typeof QRCode === "undefined") {
+            showToast("QR library could not load — check your connection once");
+            return;
+        }
     }
     try {
         offlinePC = new RTCPeerConnection(offlineIceConfig());
@@ -1819,22 +2040,29 @@ let gmScanStats = { frames: 0, cropHits: 0, fullHits: 0, width: 0, height: 0 };
 
 // ----- Shared fullscreen camera scanning helper -----
 function startCameraScan(onDecoded, title) {
+    stopOfflineCamera();
+    // The scanner overlay opens even when the camera cannot be used: the paste
+    // sheet and the "pick a QR image" button both keep working, so a blocked or
+    // missing camera is no longer a dead end.
+    window.__qrManualDecodeHandler = onDecoded;
+    const scanTitleEl = document.getElementById("qr-scan-title");
+    scanTitleEl.innerText = title || "Find a QR code";
+    document.getElementById("qr-scan-overlay").classList.remove("hidden");
+    // jsQR is lazy-loaded: the camera preview opens straight away and the
+    // decode loop just skips frames until the library lands (normally well
+    // under a second, and it is pre-warmed after boot anyway).
     if (typeof jsQR === "undefined") {
-        showToast("QR scanner library not loaded — connect to internet once, then this works offline forever after");
-        return;
+        gmEnsureLib("jsqr").then(ok => {
+            if (!ok) showToast("Scanner could not load — paste the code or pick a QR image instead");
+        });
     }
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        // This is the file:// case — camera APIs are blocked by the
-        // browser outside a secure context (https:// or localhost).
-        showToast("Camera blocked: open this app via https:// or a local server (not by double-clicking the file) for QR scan to work");
-        const msgEl = document.getElementById("offline-status-msg");
-        if (msgEl) msgEl.innerText = "⚠️ Camera needs the app served over https:// or http://localhost — double-clicking the file won't work for scanning. \"New Chat\" (enter Ghost ID) still works fine.";
+        // This is the file:// case — camera APIs are blocked by the browser
+        // outside a secure context (https:// or localhost).
+        scanTitleEl.innerText = "Camera unavailable — paste the code or pick an image";
+        showToast("Camera needs the app served over https:// — paste the code or pick a QR image instead");
         return;
     }
-    stopOfflineCamera();
-    document.getElementById("qr-scan-title").innerText = title || "Find a QR code";
-    document.getElementById("qr-scan-overlay").classList.remove("hidden");
-    window.__qrManualDecodeHandler = onDecoded;
     const video = document.getElementById("qr-scan-video");
     const canvas = document.getElementById("qr-scan-canvas");
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -1883,6 +2111,9 @@ function startCameraScan(onDecoded, title) {
                 return;
             }
             waitingFrames = 0;
+            // Library still loading on first use — keep the preview live and
+            // start decoding the moment it is ready.
+            if (typeof jsQR === "undefined") { schedule(); return; }
             frameNo++;
             gmScanStats.frames++;
             gmScanStats.width = video.videoWidth;
@@ -2039,9 +2270,31 @@ function renderChatList() {
 }
 
 function filterChats(q) {
-    document.querySelectorAll(".chat-item").forEach(item => {
-        item.style.display = item.id.toLowerCase().includes(q.toLowerCase()) ? "" : "none";
+    const query = (q || "").trim().toLowerCase();
+    const items = document.querySelectorAll(".chat-item");
+    let visible = 0;
+    items.forEach(item => {
+        const nameEl = item.querySelector(".chat-item-name");
+        const hay = (item.id + " " + (nameEl ? nameEl.textContent : "")).toLowerCase();
+        const show = !query || hay.includes(query);
+        item.style.display = show ? "" : "none";
+        if (show) visible++;
     });
+
+    // A search that matches nothing used to leave a blank list with no
+    // explanation — the search bar now owns its own empty state, and the
+    // note is hidden again the moment something matches (or there are no
+    // conversations to filter at all, where .empty-state is showing).
+    const note = document.getElementById("chat-search-empty");
+    if (!note) return;
+    if (visible > 0 || items.length === 0) {
+        note.classList.add("hidden");
+        return;
+    }
+    const noteText = document.getElementById("chat-search-empty-text");
+    // textContent, never innerHTML: the query is user input.
+    if (noteText) noteText.textContent = "No chats match \u201C" + (q || "").trim() + "\u201D";
+    note.classList.remove("hidden");
 }
 
 function openChat(peerId) {
@@ -2710,28 +2963,40 @@ function shareLiveLocation() {
 }
 function clearCurrentChat() {
     closeAllMenus();
-    if (!currentChatPeer || !confirm("Clear all messages?")) return;
-    chatData[currentChatPeer].messages = [];
-    renderAllMessages(currentChatPeer);
-    showToast("Chat cleared");
+    if (!currentChatPeer) return;
+    const clearPeer = currentChatPeer;
+    gmConfirm("Clear all messages in this chat? This cannot be undone.", () => {
+        chatData[clearPeer].messages = [];
+        renderAllMessages(clearPeer);
+        showToast("Chat cleared");
+    }, { title: "Clear chat", confirmLabel: "Clear" });
 }
-function clearAllChats() { closeAllMenus(); if(confirm("Clear all chats?")){ Object.keys(chatData).forEach(k => chatData[k].messages = []); showToast("All chats cleared"); renderChatList(); } }
+function clearAllChats() {
+    closeAllMenus();
+    gmConfirm("Clear every chat on this device? This cannot be undone.", () => {
+        Object.keys(chatData).forEach(k => chatData[k].messages = []);
+        showToast("All chats cleared");
+        renderChatList();
+    }, { title: "Clear all chats", confirmLabel: "Clear all" });
+}
 let blockedPeers = new Set();
 
 function blockCurrentPeer() {
     closeAllMenus();
-    if (!currentChatPeer || !confirm("Block " + currentChatPeer + "?")) return;
+    if (!currentChatPeer) return;
     const peerId = currentChatPeer;
-    // FIX 8: Add to blocked set, close connection, remove from chat
-    blockedPeers.add(peerId);
-    safeStorage.set("gm_blocked", JSON.stringify([...blockedPeers]));
-    const conn = activeConnections.find(c => c.peer === peerId);
-    if (conn) { try { conn.close(); } catch(e){} }
-    activeConnections = activeConnections.filter(c => c.peer !== peerId);
-    delete chatData[peerId];
-    delete onlineUsers[peerId];
-    goBackToList();
-    showToast(peerId + " blocked");
+    gmConfirm("Block " + peerId + "? They can no longer reach you.", () => {
+        // Add to the blocked set, close the connection, drop the chat
+        blockedPeers.add(peerId);
+        safeStorage.set("gm_blocked", JSON.stringify([...blockedPeers]));
+        const conn = activeConnections.find(c => c.peer === peerId);
+        if (conn) { try { conn.close(); } catch(e){} }
+        activeConnections = activeConnections.filter(c => c.peer !== peerId);
+        delete chatData[peerId];
+        delete onlineUsers[peerId];
+        goBackToList();
+        showToast(peerId + " blocked");
+    }, { title: "Block Ghost", confirmLabel: "Block" });
 }
 
 function loadBlockedPeers() {
@@ -3305,12 +3570,22 @@ function initRadarMap() {
     } catch(e) { console.error(e); }
 }
 
-function toggleRadarMap() {
+async function toggleRadarMap() {
     closeAllMenus();
     const map = document.getElementById("map-container");
-    const hidden = map.classList.contains("hidden");
-    map.classList.toggle("hidden", !hidden);
-    if (!hidden) return;
+    if (!map) return;
+    const wasHidden = map.classList.contains("hidden");
+    map.classList.toggle("hidden", !wasHidden);
+    if (!wasHidden) return;                 // closing it — nothing to load
+    if (!radarMapInstance) {
+        const ok = await gmEnsureLib("leaflet");
+        if (!ok || typeof L === "undefined") {
+            map.classList.add("hidden");
+            showToast("Radar map could not load — it needs one online visit");
+            return;
+        }
+        initRadarMap();
+    }
     if (radarMapInstance) setTimeout(() => radarMapInstance.invalidateSize(), 300);
 }
 
@@ -3357,6 +3632,21 @@ document.addEventListener("click", e => {
         document.getElementById("emoji-picker")?.classList.add("hidden");
         document.getElementById("attach-menu")?.classList.add("hidden");
     }
+});
+
+// ===== KEYBOARD / SCREEN-READER SUPPORT =====
+// Menu rows, rating stars and reaction emoji are <div>/<span>s with an onclick
+// (converting them to <button>s would break their flex layouts). They carry
+// role="button" + tabindex="0", and this makes Enter/Space behave like a tap.
+document.addEventListener("keydown", e => {
+    if (e.key !== "Enter" && e.key !== " " && e.key !== "Spacebar") return;
+    const el = e.target;
+    if (!el || !el.getAttribute) return;
+    const tag = el.tagName;
+    if (tag === "BUTTON" || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "A") return;
+    if (el.getAttribute("role") !== "button" || typeof el.click !== "function") return;
+    e.preventDefault();
+    el.click();
 });
 
 // ===== KEYBOARD FIX (ALL ANDROID) =====
@@ -3431,6 +3721,11 @@ document.addEventListener("DOMContentLoaded", () => {
     setupTypingListener();
     fixKeyboard();
 
+    // Warm the scanner library in the background after first paint: scanning is
+    // a core flow, so it should not wait on a load — while the ~1 MB of the
+    // other lazy libraries stays off the startup path entirely.
+    setTimeout(() => { if (typeof jsQR === "undefined") gmEnsureLib("jsqr"); }, 1500);
+
     // Fix send/mic button on all Android phones - touchend is faster than click
     const actionBtn = document.getElementById("voice-record-btn");
     if (actionBtn) {
@@ -3467,7 +3762,7 @@ document.addEventListener("touchmove", e => {
     if (!touch) return;
     if (touch.clientY <= lastTouchStartY) return;              // not a downward pull
     if (window.scrollY > 0 || document.documentElement.scrollTop > 0) return;
-    if (e.target.closest("#messages-container, #chat-list-container, .profile-content, .modal-box, #nearby-ghosts-list, #wifi-reach-list, #wifi-reach-panel, .leaflet-container, #theme-grid, .modal-overlay")) return;
+    if (e.target.closest("#messages-container, #chat-list-container, .profile-content, .online-content, .modal-box, #online-reach-list, .leaflet-container, #theme-grid, .modal-overlay")) return;
     if (isInsideScrollable(e.target)) return;
     e.preventDefault();
 }, { passive: false });
@@ -3497,6 +3792,173 @@ function showToast(msg) {
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => toast.classList.add("hidden"), 3000);
 }
+
+// ===== IN-APP DIALOGS =====
+// window.confirm()/prompt() draw a browser-chrome dialog that prints the page
+// origin above the message and ignores the app theme. These helpers keep the
+// flow inside the app instead.
+let gmConfirmHandler = null;
+function gmConfirm(message, onConfirm, opts) {
+    const overlay = document.getElementById("gm-confirm");
+    if (!overlay) { if (onConfirm) onConfirm(); return; }   // never block an action
+    document.getElementById("gm-confirm-msg").innerText = message;
+    document.getElementById("gm-confirm-title").innerText = (opts && opts.title) || "Are you sure?";
+    document.getElementById("gm-confirm-yes").innerText = (opts && opts.confirmLabel) || "Confirm";
+    gmConfirmHandler = onConfirm || null;
+    overlay.classList.remove("hidden");
+}
+function gmConfirmResolve(ok) {
+    const overlay = document.getElementById("gm-confirm");
+    if (overlay) overlay.classList.add("hidden");
+    const fn = gmConfirmHandler;
+    gmConfirmHandler = null;
+    if (ok && typeof fn === "function") fn();
+}
+// The settings header always mirrors the live profile (avatar, display name,
+// Ghost ID), so the sheet opens with real data instead of placeholders.
+function gmSyncSettingsHeader() {
+    const nameEl = document.getElementById("settings-head-name");
+    if (nameEl) nameEl.innerText = userDisplayName || "Ghost";
+    const idEl = document.getElementById("settings-head-id");
+    if (idEl) idEl.innerText = userGhostID || "Ghost-XXXXXX";
+    setAvatarDisplay("settings-avatar", userCurrentDP);
+    gmAppLockRefreshStatus();
+}
+function openSettingsSheet() { closeAllMenus(); gmSyncSettingsHeader(); showEl("settings-sheet"); }
+function closeSettingsSheet() { hideEl("settings-sheet"); }
+
+// ===== APP LOCK (Settings) =====
+// The PIN moved out of signup: it is set, changed or removed here instead.
+// Storage keys stay the lock screen's own (gm_pin + gm_pin_length), so anyone
+// who already had a PIN keeps it and still sees the lock screen on open. A new
+// PIN is always 4 digits; the "current PIN" step uses the saved length
+// (getPinLength) so a legacy 6-digit PIN can still be verified and removed.
+let gmAppLockBuffer = "";
+let gmAppLockNewPin = "";
+let gmAppLockMode = "menu";     // menu | check | new | confirm
+let gmAppLockNext = "";         // what a passed "check" leads to: change | remove
+
+function gmAppLockHasPin() { return !!safeStorage.get("gm_pin"); }
+function gmAppLockCurrentLength() { return getPinLength() === 6 ? 6 : 4; }
+
+function gmAppLockRefreshStatus() {
+    const el = document.getElementById("app-lock-status");
+    if (!el) return;
+    const on = gmAppLockHasPin();
+    el.innerText = on ? "On" : "Off";
+    el.classList.toggle("on", on);
+}
+
+function gmAppLockDots(count) {
+    const wrap = document.getElementById("app-lock-dots");
+    if (wrap) wrap.innerHTML = "<span></span>".repeat(count || 4);
+    gmAppLockPaintDots();
+}
+function gmAppLockPaintDots() {
+    document.querySelectorAll("#app-lock-dots span").forEach((s, i) => s.classList.toggle("filled", i < gmAppLockBuffer.length));
+}
+function gmAppLockReset() { gmAppLockBuffer = ""; gmAppLockNewPin = ""; }
+function gmAppLockShowKeypad(show) {
+    document.getElementById("app-lock-numpad").classList.toggle("hidden", !show);
+    document.getElementById("app-lock-dots").classList.toggle("hidden", !show);
+    document.getElementById("app-lock-actions").classList.toggle("hidden", show);
+    document.getElementById("app-lock-cancel").classList.toggle("hidden", !show);
+}
+function gmAppLockTitle(title, hint) {
+    document.getElementById("app-lock-title").innerText = title;
+    document.getElementById("app-lock-hint").innerText = hint;
+}
+
+function openAppLockSheet() {
+    closeSettingsSheet();
+    gmAppLockReset();
+    if (gmAppLockHasPin()) {
+        gmAppLockMode = "menu";
+        gmAppLockTitle("App Lock is on", "Change the PIN, or turn the lock off entirely.");
+        gmAppLockDots(4);
+        gmAppLockShowKeypad(false);
+    } else {
+        gmAppLockMode = "new";
+        gmAppLockTitle("Set a 4-digit PIN", "You will need this PIN every time the app opens.");
+        gmAppLockDots(4);
+        gmAppLockShowKeypad(true);
+    }
+    showEl("app-lock-modal");
+}
+function closeAppLockSheet() { gmAppLockReset(); hideEl("app-lock-modal"); }
+
+function gmAppLockStartChange() {
+    gmAppLockMode = "check";
+    gmAppLockNext = "change";
+    gmAppLockReset();
+    gmAppLockTitle("Enter your current PIN", "Confirm it is really you before choosing a new PIN.");
+    gmAppLockDots(gmAppLockCurrentLength());
+    gmAppLockShowKeypad(true);
+}
+function gmAppLockStartRemove() {
+    gmAppLockMode = "check";
+    gmAppLockNext = "remove";
+    gmAppLockReset();
+    gmAppLockTitle("Enter your current PIN", "The lock turns off only if this PIN is correct.");
+    gmAppLockDots(gmAppLockCurrentLength());
+    gmAppLockShowKeypad(true);
+}
+
+function gmAppLockPress(d) {
+    if (gmAppLockMode !== "check" && gmAppLockMode !== "new" && gmAppLockMode !== "confirm") return;
+    const len = gmAppLockMode === "check" ? gmAppLockCurrentLength() : 4;
+    if (gmAppLockBuffer.length >= len) return;
+    gmAppLockBuffer += d;
+    gmAppLockPaintDots();
+    if (gmAppLockBuffer.length === len) setTimeout(gmAppLockComplete, 150);
+}
+function gmAppLockBackspace() { gmAppLockBuffer = gmAppLockBuffer.slice(0, -1); gmAppLockPaintDots(); }
+
+function gmAppLockComplete() {
+    const entered = gmAppLockBuffer;
+    gmAppLockBuffer = "";
+    if (gmAppLockMode === "check") {
+        if (entered !== safeStorage.get("gm_pin")) {
+            gmAppLockPaintDots();
+            showToast("Wrong current PIN");
+            return;
+        }
+        if (gmAppLockNext === "remove") {
+            safeStorage.del("gm_pin");
+            gmAppLockRefreshStatus();
+            closeAppLockSheet();
+            showToast("PIN removed");
+            return;
+        }
+        gmAppLockMode = "new";
+        gmAppLockDots(4);
+        gmAppLockTitle("Set a new 4-digit PIN", "Enter the new PIN you want to use.");
+        return;
+    }
+    if (gmAppLockMode === "new") {
+        gmAppLockNewPin = entered;
+        gmAppLockMode = "confirm";
+        gmAppLockDots(4);
+        gmAppLockTitle("Confirm your new PIN", "Type the same 4 digits again.");
+        return;
+    }
+    if (gmAppLockMode !== "confirm") return;
+    if (entered !== gmAppLockNewPin) {
+        gmAppLockNewPin = "";
+        gmAppLockMode = "new";
+        gmAppLockDots(4);
+        gmAppLockTitle("Set a 4-digit PIN", "Those PINs did not match — enter the new PIN again.");
+        showToast("PINs do not match");
+        return;
+    }
+    safeStorage.set("gm_pin", entered);
+    safeStorage.set("gm_pin_length", "4");
+    gmAppLockNewPin = "";
+    gmAppLockRefreshStatus();
+    closeAppLockSheet();
+    showToast("PIN set");
+}
+
 // ===== CREDITS & PREMIUM SYSTEM =====
 // Credits are per-Ghost-ID, stored locally (no server). Eligibility: user
 // must already have a Ghost ID / profile created — an anonymous/no-profile
@@ -3547,6 +4009,17 @@ function renderCreditsUI() {
     });
     earnBtns.forEach(b => b.disabled = !hasProfile);
 
+    // The bonus button doubles as its own countdown, so the 24h cooldown is
+    // never a surprise.
+    const bonusBtn = document.getElementById("bonus-earn-btn");
+    const bonusLabel = document.getElementById("bonus-earn-label");
+    if (bonusLabel) {
+        const wait = msUntilBonus();
+        bonusLabel.innerText = wait > 0 ? `Bonus ready in ${formatBonusWait(wait)}` : `Daily Bonus (+5)`;
+    }
+    if (bonusBtn) bonusBtn.disabled = !hasProfile || msUntilBonus() > 0;
+
+
     if (premiumBtn) {
         // innerHTML (not innerText) so the inline star icon survives — emoji
         // icons are gone from the whole premium/credits surface.
@@ -3564,36 +4037,44 @@ function renderCreditsUI() {
 }
 
 // ----- Earning -----
-function watchAdForCredits() {
+// One free bonus per 24 hours, enforced on-device. No ad network is involved,
+// so nothing here pretends an ad played.
+const BONUS_AMOUNT = 5;
+const BONUS_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+function bonusClaimedAt() {
+    if (!userGhostID) return 0;
+    return parseInt(safeStorage.get("gm_bonus_at_" + userGhostID) || "0", 10) || 0;
+}
+function msUntilBonus() { return Math.max(0, bonusClaimedAt() + BONUS_COOLDOWN_MS - Date.now()); }
+function formatBonusWait(ms) {
+    const mins = Math.max(1, Math.ceil(ms / 60000));
+    if (mins < 60) return mins + " min";
+    const hrs = Math.floor(mins / 60);
+    const rest = mins % 60;
+    return rest ? hrs + "h " + rest + "m" : hrs + "h";
+}
+function claimDailyBonus() {
     if (!userGhostID) { showToast("Create your Ghost ID first to start earning credits"); return; }
-    const overlay = document.getElementById("watch-ad-overlay");
-    const textEl = document.getElementById("watch-ad-text");
-    if (!overlay) return;
-    overlay.classList.remove("hidden");
-    textEl.innerText = "Loading Ad...";
-    // TESTING MODE: no real ad SDK yet — simulate a short "loading" delay,
-    // then award credits. Swap this timeout for a real AdMob rewarded-ad
-    // call when closer to public launch.
-    setTimeout(() => {
-        textEl.innerText = "Ad playing...";
-        setTimeout(() => {
-            overlay.classList.add("hidden");
-            addCredits(5);
-            showToast("🎉 +5 Credits earned!");
-        }, 1200);
-    }, 1200);
+    const wait = msUntilBonus();
+    if (wait > 0) {
+        showToast(`Daily bonus already claimed — next one in ${formatBonusWait(wait)}`);
+        return;
+    }
+    safeStorage.set("gm_bonus_at_" + userGhostID, String(Date.now()));
+    addCredits(BONUS_AMOUNT);
+    showToast(`+${BONUS_AMOUNT} credits added — next bonus in 24h`);
 }
 
 function shareAppForCredits() {
     if (!userGhostID) { showToast("Create your Ghost ID first to start earning credits"); return; }
     const shareData = {
         title: "Ghost Mesh",
-        text: "Chat with me on Ghost Mesh — a private, serverless P2P messenger.",
+        text: "Chat with me on Ghost Mesh — a private, peer-to-peer messenger.",
         url: location.href
     };
     if (navigator.share) {
         navigator.share(shareData)
-            .then(() => { addCredits(5); showToast("🎉 +5 Credits earned!"); })
+            .then(() => { addCredits(5); showToast("+5 credits earned — thanks for sharing!"); })
             .catch(() => { /* user cancelled share — no credits awarded */ });
     } else {
         // No native share sheet available (desktop browser) — fall back to
@@ -3646,7 +4127,7 @@ function confirmSendCredit() {
     setCredits(getCredits() - amt);
     sendToChat(currentChatPeer, { type: "credit-gift", sender: userGhostID, senderName: userDisplayName, amount: amt });
     addSystemMsg(currentChatPeer, `You sent ${amt} credits to ${chatData[currentChatPeer]?.displayName || currentChatPeer}`);
-    showToast(`👻 Sent ${amt} credits!`);
+    showToast(`Sent ${amt} credits!`);
     closeSendCreditModal();
 }
 
@@ -3658,19 +4139,19 @@ function unlockPremiumTrial() {
     if (isPremiumUnlocked()) { showToast("Premium already unlocked!"); closePremiumModal(); return; }
     const COST = 20;
     if (getCredits() < COST) {
-        showToast(`Need ${COST} credits — you have ${getCredits()}. Watch ads or share to earn more!`);
+        showToast(`Need ${COST} credits — you have ${getCredits()}. Claim the daily bonus or share to earn more!`);
         showNotEnoughCredits(`Premium unlock costs ${COST} credits — you have ${getCredits()}.`);
         return;
     }
     setCredits(getCredits() - COST);
     setPremiumUnlocked();
-    showToast("⭐ Premium unlocked! Enjoy unlimited pins, themes & more");
+    showToast("Premium unlocked — unlimited pins, themes and more");
     closePremiumModal();
 }
 
-// Real Play Billing / Stripe-style payment only makes sense once this is a
-// native APK (see NATIVE APK CONVERSION notes) — for now this simulates the
-// purchase locally so premium features can be tested end-to-end.
+// Plans unlock on-device today (free during launch). This same table is
+// what the Play Billing integration reads once billing goes live in the
+// store release.
 const PREMIUM_PLANS = {
     monthly: { label: "1 Month", price: "$5", days: 30 },
     "6month": { label: "6 Months", price: "$30", days: 182 },
@@ -3680,24 +4161,18 @@ function buyPremiumPlan(planId) {
     if (!userGhostID) { showToast("Create your Ghost ID first"); return; }
     const plan = PREMIUM_PLANS[planId];
     if (!plan) return;
-    const confirmMsg = `Simulate purchasing ${plan.label} (${plan.price})? Real payments are wired up once this becomes a native app with Play Billing.`;
-    if (!confirm(confirmMsg)) return;
-
-    const expiry = Date.now() + plan.days * 24 * 60 * 60 * 1000;
-    safeStorage.set("gm_premium_" + userGhostID, "1");
-    safeStorage.set("gm_premium_plan_" + userGhostID, planId);
-    safeStorage.set("gm_premium_expiry_" + userGhostID, String(expiry));
-    showToast(`⭐ ${plan.label} Premium activated (simulated) — enjoy the perks!`);
-    renderCreditsUI();
-}
-
-// Testing shortcut — instantly adds 1 credit with no eligibility bypass,
-// so QA can test the whole earn→spend loop quickly without watching fake
-// ads or sharing repeatedly. Remove this button before public launch.
-function quickAddCredit() {
-    if (!userGhostID) { showToast("Create your Ghost ID first"); return; }
-    addCredits(1);
-    showToast("+1 Credit (test)");
+    gmConfirm(
+        `${plan.label} — ${plan.price}. Premium is free during launch, so nothing is charged on this device. These prices apply once Google Play billing goes live.`,
+        () => {
+            const expiry = Date.now() + plan.days * 24 * 60 * 60 * 1000;
+            safeStorage.set("gm_premium_" + userGhostID, "1");
+            safeStorage.set("gm_premium_plan_" + userGhostID, planId);
+            safeStorage.set("gm_premium_expiry_" + userGhostID, String(expiry));
+            showToast(`${plan.label} Premium activated — every perk is unlocked`);
+            renderCreditsUI();
+        },
+        { title: "Activate Premium", confirmLabel: "Activate" }
+    );
 }
 
 // ===== GHOST RADAR (Wi-Fi-settings-style) UI =====
@@ -3740,8 +4215,9 @@ function toggleTorch() {
 function openLocationInMaps(lat, lng) {
     window.open(`https://www.google.com/maps?q=${lat},${lng}`, "_blank");
 }
-function openLocationOnRadar(lat, lng) {
-    toggleRadarMap();
+async function openLocationOnRadar(lat, lng) {
+    const map = document.getElementById("map-container");
+    if (map && map.classList.contains("hidden")) await toggleRadarMap();
     if (!radarMapInstance) { showToast("Radar map not ready yet"); return; }
     setTimeout(() => {
         radarMapInstance.invalidateSize();
@@ -3763,7 +4239,10 @@ const androidBackLayers = [
     ["qr-scan-overlay", () => cancelCameraScan()],
     ["incoming-call-overlay", () => rejectIncomingCall()],
     ["call-screen", () => endCurrentCall()],
-    ["watch-ad-overlay", () => hideEl("watch-ad-overlay")],
+    ["gm-confirm", () => gmConfirmResolve(false)],
+    ["gm-paste-modal", () => gmClosePasteModal()],
+    ["app-lock-modal", () => closeAppLockSheet()],
+    ["settings-sheet", () => closeSettingsSheet()],
     ["premium-modal", () => closePremiumModal()],
     ["send-credit-modal", () => closeSendCreditModal()],
     ["not-enough-credits-modal", () => closeNotEnoughCreditsModal()],
@@ -3773,7 +4252,7 @@ const androidBackLayers = [
     ["new-group-modal", () => closeNewGroupModal()],
     ["feedback-modal", () => closeFeedbackModal()],
     ["destruct-overlay", () => hideEl("destruct-overlay")],
-    ["theme-screen", () => showScreen("chatlist-screen")],
+    ["theme-screen", () => closeThemePicker()],
     ["profile-screen", () => closeProfile()],
     ["chat-screen", () => goBackToList()]
 ];

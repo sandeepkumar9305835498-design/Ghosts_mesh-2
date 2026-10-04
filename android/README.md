@@ -51,6 +51,9 @@ too, otherwise it will not reach the APK.
 | Hardware back button | Asks the page first through `handleAndroidBack()` (in `script.js`): closes menus → modals → call screens → returns from a chat. Only then does Android leave the app. |
 | Edge-to-edge (Android 15+) | `applySystemBarInsets()` pads the root view with the system bar insets, so the app is never drawn under the status/navigation bars. |
 | Service worker | Skipped inside the APK (`navigator.userAgent` contains `GhostMeshAndroid`). The page is already local, and a cached copy would mask web updates after an app update. |
+| Startup weight | `three.min.js`, `jsQR.js`, `leaflet.js` and `qrcode.min.js` (~1 MB together) are **not** parsed at launch any more. `gmEnsureLib()` in `script.js` loads each one on first use; jsQR is warmed in the background after first paint because scanning is a core flow. `webAppFiles` still ships all four, so every lazy load is a local file read. |
+| Radar map | Built the first time the map is opened, not at login. Previously a hidden Leaflet map was created at every login, which fetched OpenStreetMap tiles the user never asked for. |
+| Live 3D theme | Falls back to the default theme with a message where WebGL is missing or blocklisted, instead of throwing inside an async call. |
 | Keyboard | `adjustResize` + the app's own `visualViewport` logic; `mediaPlaybackRequiresUserGesture(false)` so voice notes and call audio can start without an extra tap. |
 
 ## Debugging
@@ -79,9 +82,9 @@ itself:
 | `GhostNativeBridge.java` | The `window.GhostNative` object the page calls: `isSupported`, `setGhostId`, `setDisplayName`, `startDiscovery`, `stopDiscovery`, `getPeers`, `connect`. |
 
 Discovered peers are pushed into the page (`window.gmApplyNativePeers([...])`)
-and rendered by the *same* function as PeerJS peers, so they appear in both
-Chats → **Online Nearby** and WiFi → **Ghosts You Can Reach**, labelled
-`Bluetooth` / `Wi-Fi Direct`, each with a **Connect** button. Nothing about the
+and rendered by the *same* function as PeerJS peers, so they appear in
+WiFi → **Ghosts You Can Reach** (the web app's single reachable-peer list),
+labelled `Bluetooth` / `Wi-Fi Direct`, each with a **Connect** button. Nothing about the
 existing chat/call path changes: BLE only finds devices and carries the Ghost
 ID, Wi-Fi Direct supplies the direct link, and the WebRTC/QR handshake still
 does the talking.
@@ -100,8 +103,8 @@ BLE scanning and Wi-Fi Direct discovery are location-gated, which is why
    `GhostNative.startDiscovery()` asks for it).
 3. A small silent notification appears — that is the discovery service.
 4. Put the phones within a few metres: each should appear in the other's
-   **Online Nearby** (Chats tab) and **Ghosts You Can Reach** (WiFi tab) within
-   ~10 seconds, labelled `Bluetooth`.
+   **Ghosts You Can Reach** list (WiFi tab) within ~10 seconds, labelled
+   `Bluetooth`.
 5. Tap **Connect** on a Wi-Fi Direct entry to form the direct link; the toast
    reports the result. For the actual conversation, the QR/offline handshake
    (or a normal online connection) is still what pairs the two Ghost IDs.
@@ -167,7 +170,9 @@ keeps the seed (only name/phone/PIN are cleared) so the identity survives.
 
 ## Still open for a Play Store release
 
-- The web app's Premium purchases are still simulated — wire Play Billing before charging money.
+- Google Play Billing is not wired up yet. The web app unlocks Premium
+  locally and says so ("free during launch"); the plan table in `script.js`
+  (`PREMIUM_PLANS`) is what a Billing integration should read before charging.
 - `new Notification()` is not implemented by Android WebView; the app already
   guards it, and in-app banners plus vibration still work.
 - Native mesh behaviour (BLE discovery range, Wi-Fi Direct group formation on
