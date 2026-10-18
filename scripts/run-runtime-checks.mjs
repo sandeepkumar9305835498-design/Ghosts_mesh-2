@@ -535,6 +535,24 @@ ok("the eye hides it again",
 ok("the phrase screen carries the red warning",
     /steal your ID/i.test($("phrase-backup-modal").textContent));
 
+// ------------------------------------------------------- skip recovery phrase
+{
+    window.GMIdentity.forget();
+    let continued = false;
+    window.gmEnsureIdentityThen(() => { continued = true; });
+    ok("a brand-new identity shows the recovery phrase", hidden("phrase-setup-modal") === false);
+    ok("the phrase step offers Skip for now",
+        /Skip for now/.test($("phrase-setup-modal").textContent),
+        $("phrase-setup-modal").textContent.slice(0, 80));
+    window.gmSkipPhraseSetup();
+    ok("skipping asks for confirmation first", hidden("gm-confirm") === false);
+    window.gmConfirmResolve(true);
+    ok("skipping closes the phrase flow and continues sign-in",
+        continued === true && hidden("phrase-setup-modal") === true,
+        "continued=" + continued + " modal=" + hidden("phrase-setup-modal"));
+    ok("the Ghost ID still exists after skipping", window.GMIdentity.exists() === true);
+}
+
 // ------------------------------------------------------- safety filter
 ok("threats are blocked", window.gmSafetyCheck("I will kill you").blocked === true);
 ok("leetspeak is folded before matching", window.gmSafetyCheck("k1ll y0u").blocked === true);

@@ -390,6 +390,31 @@
         if (typeof done === "function") done();
     }
 
+    // Skipping is a real, supported choice — the Ghost ID is already created and
+    // works on this phone. The 12 words stay available from Profile → Recovery
+    // Phrase, so nobody is locked out by not writing them down now. The only
+    // consequence is stated plainly before skipping.
+    function skipPhraseSetup() {
+        const proceed = () => {
+            gmHide("phrase-setup-modal");
+            const done = pendingPhraseCallback;
+            pendingPhraseCallback = null;
+            activePhrase = null;
+            verifyTargets = [];
+            gmToast("Ghost ID created — save the phrase later from Profile");
+            if (typeof done === "function") done();
+        };
+        const warning = "Skip saving your recovery phrase? Your Ghost ID works on this phone, and you can view the 12 words later in Profile → Recovery Phrase. "
+            + "But if you lose this phone before you save them, this Ghost ID cannot be restored.";
+        if (typeof gmConfirm === "function") {
+            gmConfirm(warning, proceed, { title: "Skip recovery phrase", confirmLabel: "Skip anyway" });
+        } else if (typeof confirm === "function") {
+            if (confirm(warning)) proceed();
+        } else {
+            proceed();
+        }
+    }
+
     // ----- Profile: "Show my recovery phrase" (re-derived from the local seed)
     function openPhraseBackup() {
         const identity = currentIdentity();
@@ -498,6 +523,7 @@
         phraseContinue,
         phraseBackToShow,
         phraseVerify,
+        skipPhraseSetup,
         copyPhrase,
         openPhraseBackup,
         openGhostAssistant,
@@ -513,6 +539,7 @@
     window.gmPhraseContinue = phraseContinue;
     window.gmPhraseBackToShow = phraseBackToShow;
     window.gmPhraseVerify = phraseVerify;
+    window.gmSkipPhraseSetup = skipPhraseSetup;
     window.gmCopyPhrase = copyPhrase;
     window.gmOpenPhraseBackup = openPhraseBackup;
     window.gmOpenGhostAssistant = openGhostAssistant;
