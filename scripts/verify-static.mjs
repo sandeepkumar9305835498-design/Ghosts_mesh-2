@@ -338,6 +338,30 @@ for (const key of ["gm_pin", "gm_pin_length"]) {
 }
 check("app lock is set up from Settings, not signup", appLockProblems);
 
+// ------------------------------------- 12. privacy, safety & PIN hardening
+// The store-facing promises have to be real in code, not just copy: a public
+// privacy page, an in-app policy sheet, report/block, an on-device safety
+// filter, an idle lock and a PIN that is never stored as typed.
+const safetyProblems = [];
+if (!exists("privacy.html")) safetyProblems.push("privacy.html (public policy page) is missing");
+if (!/id="privacy-modal"/.test(html)) safetyProblems.push("the in-app privacy sheet is missing");
+for (const fn of ["openPrivacyPolicy", "closePrivacyPolicy", "reportCurrentPeer", "openBlockedList",
+    "gmTogglePhraseReveal", "gmSafetyCheck", "gmPinMatches", "gmStartSessionGuard", "toggleLowBatteryMode",
+    "gmRenderOnlineStrip", "gmEnsureSingleEmptyState"]) {
+    if (!defined.has(fn)) safetyProblems.push(fn + "() is missing");
+}
+if (!/gm_pin_hashed/.test(scriptSource)) safetyProblems.push("the PIN is not marked as hashed");
+if (/safeStorage\.set\("gm_pin",\s*entered\)/.test(scriptSource)) {
+    safetyProblems.push("the raw PIN is written to storage again");
+}
+if (!/sha256Hex/.test(scriptSource)) safetyProblems.push("PIN hashing does not use SHA-256");
+if (!/Report Abuse/.test(html) || !/Report & block/.test(scriptSource)) {
+    safetyProblems.push("the report-abuse action is missing");
+}
+if (!/privacy\.html/.test(read("service-worker.js"))) safetyProblems.push("privacy.html is not precached");
+if (!/phrase-backup-veil/.test(html)) safetyProblems.push("the recovery phrase is not hidden by default");
+check("privacy, safety and PIN hardening are wired", safetyProblems);
+
 // ---------------------------------------------------------------- report
 const failed = results.filter(r => r.problems.length);
 for (const r of results) {

@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#9b59f7">
+    <meta name="color-scheme" content="dark">
+    <title>Privacy Policy — Ghost Mesh</title>
+    <meta name="description" content="Ghost Mesh privacy policy: no account server, no cloud database, no analytics, no tracking.">
+    <link rel="icon" href="icon-192.png">
+    <style>
+        :root {
+            --bg: #07060b;
+            --surface: #121019;
+            --surface2: #1a1723;
+            --border: #2a2436;
+            --text: #f2eff8;
+            --text2: #b9b3c9;
+            --text3: #8a8399;
+            --accent: #9b59f7;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            line-height: 1.65;
+            -webkit-font-smoothing: antialiased;
+        }
+        .wrap { max-width: 720px; margin: 0 auto; padding: 28px 20px 64px; }
+        header { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+        header img { width: 44px; height: 44px; border-radius: 12px; }
+        h1 { font-size: 24px; margin: 0; letter-spacing: -0.3px; }
+        .sub { color: var(--text3); font-size: 12.5px; margin: 2px 0 22px; }
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 16px 18px;
+            margin-bottom: 14px;
+        }
+        h2 { font-size: 13px; letter-spacing: 0.7px; text-transform: uppercase; color: var(--accent); margin: 0 0 8px; }
+        p { margin: 0 0 10px; color: var(--text2); font-size: 14px; }
+        p:last-child { margin-bottom: 0; }
+        ul { margin: 0 0 10px; padding-left: 20px; color: var(--text2); font-size: 14px; }
+        li { margin-bottom: 6px; }
+        strong { color: var(--text); }
+        a { color: var(--accent); text-decoration: none; }
+        .back {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 11px 16px;
+            color: var(--text);
+            font-size: 13px;
+            font-weight: 700;
+        }
+        footer { color: var(--text3); font-size: 11px; text-align: center; margin-top: 24px; }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <header>
+        <img src="icon-192.png" alt="Ghost Mesh">
+        <div>
+            <h1>Privacy Policy</h1>
+            <p class="sub">Ghost Mesh · Last updated 18 October 2026</p>
+        </div>
+    </header>
+
+    <div class="card">
+        <h2>In one sentence</h2>
+        <p>Ghost Mesh has no account server and no cloud database — your messages, contacts and profile stay on your phone.</p>
+    </div>
+
+    <div class="card">
+        <h2>What we collect</h2>
+        <p><strong>Nothing.</strong> There is no sign-up, no email address, no phone verification and no analytics or advertising SDK inside the app.</p>
+        <ul>
+            <li>No name, email or phone number is sent anywhere.</li>
+            <li>No contact list is uploaded.</li>
+            <li>No usage analytics, crash reports or device identifiers are collected.</li>
+        </ul>
+    </div>
+
+    <div class="card">
+        <h2>Where your data lives</h2>
+        <p>Chats, settings, your display name, your Ghost ID and your recovery phrase all live in local storage on your device. The Ghost ID is derived mathematically from a random seed created on the phone; it is not registered on a server.</p>
+        <p>Uninstalling the app, or using <em>Clear All Chats</em> in Settings, removes this data from the device.</p>
+    </div>
+
+    <div class="card">
+        <h2>Direct connections</h2>
+        <p>Messages, files and calls travel directly between two devices over WebRTC. When two people pair over the internet, the public PeerJS broker is used only to exchange connection metadata; message content is sent device to device.</p>
+        <p>Nearby pairing uses a QR code exchanged on the same Wi-Fi or hotspot and does not use any relay at all.</p>
+    </div>
+
+    <div class="card">
+        <h2>Location</h2>
+        <p>Location is <strong>off by default</strong>. It is used only when you deliberately share your live location in a chat or open the radar map. A shared location is sent to that chat and is not stored on any server.</p>
+    </div>
+
+    <div class="card">
+        <h2>Camera, microphone and photos</h2>
+        <p>Camera and microphone access is used for QR pairing, voice notes, voice calls and video calls. Photos are picked through the system photo picker, which gives the app access only to the item you selected — never your whole gallery.</p>
+    </div>
+
+    <div class="card">
+        <h2>Content and safety</h2>
+        <p>An on-device filter blocks threats, sexual content and extortion in messages you send, and incoming text that breaks the same rules is not displayed. You can report and block any contact from the chat menu. Reports are kept on your device for your own record.</p>
+    </div>
+
+    <div class="card">
+        <h2>Payments</h2>
+        <p>Premium plans, when payment is enabled, are processed by Razorpay. Card and UPI details are entered in Razorpay's checkout and are never seen or stored by Ghost Mesh. No payment is collected while the app shows the launch offer.</p>
+    </div>
+
+    <div class="card">
+        <h2>Children</h2>
+        <p>Ghost Mesh is not directed at children under 13.</p>
+    </div>
+
+    <div class="card">
+        <h2>Contact</h2>
+        <p>Questions about this policy: <a href="mailto:privacy@ghostmesh.app">privacy@ghostmesh.app</a></p>
+    </div>
+
+    <a class="back" href="./index.html">Back to Ghost Mesh</a>
+    <footer>Ghost Mesh — Privacy-first · End-to-end encrypted · Direct device-to-device</footer>
+</div>
+</body>
+</html>

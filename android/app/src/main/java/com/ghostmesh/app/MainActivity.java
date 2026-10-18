@@ -30,6 +30,7 @@ import android.widget.Toast;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.PickVisualMediaRequest;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -290,6 +291,30 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
                 pendingFileChooserCallback = null;
             });
 
+    /**
+     * Android Photo Picker for <input type="file" accept="image/*">.
+     *
+     * createIntent() opens ACTION_GET_CONTENT, which on many OEM builds shows a
+     * documents browser that asks the user to grant access to whole folders.
+     * The Photo Picker (API 33+, with the system/Google Play fallback below it)
+     * hands back only the single item the user tapped, so the app never gets
+     * read access to the gallery — nothing to over-request, nothing to revoke.
+     */
+    private final ActivityResultLauncher<PickVisualMediaRequest> photoPickerLauncher =
+            registerForActivityResult(new ActivityResultContracts.PickVisualMedia(), uri -> {
+                if (pendingFileChooserCallback == null) return;
+                pendingFileChooserCallback.onReceiveValue(uri == null ? null : new Uri[]{uri});
+                pendingFileChooserCallback = null;
+            });
+
+    private final ActivityResultLauncher<PickVisualMediaRequest> photoPickerMultiLauncher =
+            registerForActivityResult(new ActivityResultContracts.PickMultipleVisualMedia(10), uris -> {
+                if (pendingFileChooserCallback == null) return;
+                pendingFileChooserCallback.onReceiveValue(
+                        uris == null || uris.isEmpty() ? null : uris.toArray(new Uri[0]));
+                pendingFileChooserCallback = null;
+            });
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -442,7 +467,25 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
                     pendingFileChooserCallback.onReceiveValue(null);
                 }
                 pendingFileChooserCallback = callback;
+                // Images only (profile picture, photo attachment) and no camera
+                // capture → the Photo Picker can answer this with a scoped URI.
+                String[] accept = params.getAcceptTypes();
+                boolean imagesOnly = accept != null && accept.length > 0;
+                if (accept != null) {
+                    for (String type : accept) {
+                        if (type == null || !type.contains("image")) { imagesOnly = false; break; }
+                    }
+                }
                 try {
+                    if (imagesOnly && !params.isCaptureEnabled()) {
+                        boolean multiple = params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE;
+                        PickVisualMediaRequest request = new PickVisualMediaRequest.Builder()
+                                .setMediaType(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                .build();
+                        if (multiple) photoPickerMultiLauncher.launch(request);
+                        else photoPickerLauncher.launch(request);
+                        return true;
+                    }
                     fileChooserLauncher.launch(params.createIntent());
                     return true;
                 } catch (Exception e) {

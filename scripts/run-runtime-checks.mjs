@@ -128,10 +128,10 @@ ok("formatBonusWait formats hours+minutes", window.formatBonusWait(90 * 60 * 100
 window.openSettingsSheet();
 ok("settings sheet opens", hidden("settings-sheet") === false);
 const settingsRows = doc.querySelectorAll("#settings-sheet .settings-row");
-ok("settings lists all nine options", settingsRows.length === 9, String(settingsRows.length));
+ok("settings lists all eleven options", settingsRows.length === 11, String(settingsRows.length));
 const settingsText = $("settings-sheet").textContent;
 for (const label of ["My Profile", "Ghost Assistant (Recover ID)", "Chat Themes", "App Lock", "Clear All Chats",
-    "Send Feedback", "Claim Daily Bonus", "Refer a Ghost", "Logout"]) {
+    "Blocked Ghosts", "Privacy Policy", "Send Feedback", "Claim Daily Bonus", "Refer a Ghost", "Logout"]) {
     ok(`settings has "${label}"`, settingsText.includes(label));
 }
 ok("no settings row says coming soon", !/coming soon/i.test(settingsText), settingsText);
@@ -262,6 +262,10 @@ ok("the duplicated Online Nearby block is gone from index.html",
 window.renderPeerLists();
 ok("the reach list renders its empty state",
     /Nobody reachable yet/.test($("online-reach-list").textContent), $("online-reach-list").textContent);
+ok("the empty reach list offers both QR pairing actions",
+    /Show My QR/.test($("online-reach-list").textContent) &&
+    /Scan Friend's QR/.test($("online-reach-list").textContent),
+    $("online-reach-list").textContent);
 ok("the reach counter reads 0 with no peers", Number($("online-reach-count").innerText) === 0, String($("online-reach-count").innerText));
 
 // ------------------------------------------------------- accessibility
@@ -472,6 +476,141 @@ ok("the row flips back to Off", $("app-lock-status").innerText === "Off", $("app
 $("lock-screen").classList.add("hidden");
 window.initApp();
 ok("reloading with no PIN goes to login, not the lock screen",
+    hidden("lock-screen") === true && hidden("login-screen") === false,
+    "lock=" + hidden("lock-screen") + " login=" + hidden("login-screen"));
+
+// ------------------------------------------------------- profile name save
+window.openProfile();
+$("profile-name-input").value = "Sumit";
+window.gmProfileNameDirty();
+ok("editing the name reveals the Save button", hidden("profile-save-btn") === false);
+window.saveDisplayName();
+ok("saving the name says Name saved!", toastText() === "Name saved!", toastText());
+ok("the Save button hides again after saving", hidden("profile-save-btn") === true);
+ok("the header picked up the new name", $("my-name-display").innerText === "Sumit", $("my-name-display").innerText);
+ok("the profile hero shows the name", $("profile-name-display").innerText === "Sumit", $("profile-name-display").innerText);
+ok("the Ghost ID has a device-only note", /only on this device/i.test($("profile-screen").textContent));
+ok("the profile has a premium call to action", !!doc.querySelector("#profile-screen .profile-premium-btn"));
+window.closeProfile();
+
+// ------------------------------------------------------- chats: online strip
+window.updateOnlineUsers("Ghost-ON1", "Online One", true);
+ok("the Chats tab lists an online user",
+    doc.querySelectorAll("#online-strip-list .online-strip-item").length === 1,
+    String(doc.querySelectorAll("#online-strip-list .online-strip-item").length));
+ok("the no-one-online note hides", hidden("online-strip-empty") === true);
+window.updateOnlineUsers("Ghost-ON1", "Online One", false);
+ok("going offline empties the strip",
+    doc.querySelectorAll("#online-strip-list .online-strip-item").length === 0 &&
+    hidden("online-strip-empty") === false);
+
+// ------------------------------------------------------- one empty card only
+const chatList = $("chat-list-container");
+const emptyClone = $("empty-state").cloneNode(true);
+emptyClone.removeAttribute("id");
+chatList.appendChild(emptyClone);
+ok("two empty cards can exist before the guard", chatList.querySelectorAll(".empty-state").length === 2);
+window.renderChatList();
+ok("renderChatList keeps exactly one empty card", chatList.querySelectorAll(".empty-state").length === 1);
+
+// ------------------------------------------------------- privacy policy
+window.openPrivacyPolicy();
+ok("the privacy policy opens", hidden("privacy-modal") === false);
+ok("the policy says no account server and no cloud database",
+    /no account server/i.test($("privacy-modal").textContent) && /Nothing\./.test($("privacy-modal").textContent));
+window.closePrivacyPolicy();
+ok("the privacy policy closes", hidden("privacy-modal") === true);
+
+// ------------------------------------------------------- recovery phrase veil
+ok("the recovery phrase starts hidden", $("phrase-backup-veil").classList.contains("revealed") === false);
+window.gmTogglePhraseReveal();
+ok("the eye reveals the phrase",
+    $("phrase-backup-veil").classList.contains("revealed") === true &&
+    $("phrase-backup-reveal-label").innerText === "Hide",
+    $("phrase-backup-reveal-label").innerText);
+window.gmTogglePhraseReveal();
+ok("the eye hides it again",
+    $("phrase-backup-veil").classList.contains("revealed") === false &&
+    $("phrase-backup-reveal-label").innerText === "Reveal");
+ok("the phrase screen carries the red warning",
+    /steal your ID/i.test($("phrase-backup-modal").textContent));
+
+// ------------------------------------------------------- safety filter
+ok("threats are blocked", window.gmSafetyCheck("I will kill you").blocked === true);
+ok("leetspeak is folded before matching", window.gmSafetyCheck("k1ll y0u").blocked === true);
+ok("sexual solicitation is blocked", window.gmSafetyCheck("send nudes").blocked === true);
+ok("ordinary chat passes the filter", window.gmSafetyCheck("see you at 5 near the station").blocked === false);
+
+// ------------------------------------------------------- report & block
+window.initChatData("Ghost-SAFE01");
+window.openChat("Ghost-SAFE01");
+window.reportCurrentPeer();
+ok("reporting asks first", hidden("gm-confirm") === false && /Report abuse/.test($("gm-confirm-title").innerText));
+window.gmConfirmResolve(true);
+ok("reporting returns to the chat list", hidden("chat-screen") === true && hidden("chatlist-screen") === false);
+ok("reporting blocks the sender", /blocked/.test(toastText()), toastText());
+window.openBlockedList();
+ok("the blocked list shows the reported Ghost", /Ghost-SAFE01/.test($("blocked-list").textContent), $("blocked-list").textContent);
+window.unblockPeer("Ghost-SAFE01");
+ok("unblocking removes the Ghost from the list", !/Ghost-SAFE01/.test($("blocked-list").textContent));
+window.closeBlockedList();
+
+// ------------------------------------------------------- live location opt-in
+window.initChatData("Ghost-LOC01");
+window.openChat("Ghost-LOC01");
+window.shareLiveLocation();
+ok("live location asks before anything is shared",
+    hidden("gm-confirm") === false && /off by default/i.test($("gm-confirm-msg").innerText),
+    $("gm-confirm-msg").innerText);
+window.gmConfirmResolve(false);
+ok("declining shares nothing", /Live location on/.test(toastText()) === false, toastText());
+window.goBackToList();
+
+// ------------------------------------------------------- battery saver
+window.toggleLowBatteryMode();
+ok("battery saver turns on", $("call-battery-btn").classList.contains("battery-on"));
+window.toggleLowBatteryMode();
+ok("battery saver turns off", $("call-battery-btn").classList.contains("battery-on") === false);
+
+// ------------------------------------------------------- self-destruct wipes
+{
+    window.initChatData("Ghost-DES01");
+    window.openChat("Ghost-DES01");
+    $("msg-input").value = "this should vanish";
+    window.sendMessage();
+    const bubbles = [...doc.querySelectorAll("#messages-container .card")];
+    const lastBubble = bubbles[bubbles.length - 1];
+    const msgId = lastBubble ? lastBubble.id : "";
+    ok("the sent message has a bubble", !!msgId, msgId);
+    window.scheduleDestruct(msgId, 0.05, "Ghost-DES01");
+    await new Promise(r => setTimeout(r, 200));
+    window.renderAllMessages("Ghost-DES01");
+    ok("a self-destructed message is gone from the store, not just the DOM",
+        doc.getElementById(msgId) === null, msgId);
+    window.goBackToList();
+}
+
+// ------------------------------------------------------- PIN hardening
+window.openAppLockSheet();
+pinPress("1357");
+await new Promise(r => setTimeout(r, 200));
+pinPress("1357");
+await new Promise(r => setTimeout(r, 200));
+ok("a fresh PIN is saved hashed", window.gmAppLockHasPin() === true && window.gmPinIsHashed() === true);
+ok("the stored value is not the four digits", window.gmPinMatches("1357") === true && window.gmPinMatches("0000") === false);
+for (let i = 0; i < 5; i++) window.gmPinRegisterFail();
+ok("five wrong tries lock the PIN pad", window.gmPinLockRemaining() > 0, String(window.gmPinLockRemaining()));
+window.gmLockSession();
+ok("the idle lock covers the app with the lock screen",
+    hidden("lock-screen") === false && hidden("app-shell") === true);
+window.gmPinResetFails();
+// pinPress() drives the lock screen; the App Lock sheet has its own keypad
+// (gmAppLockPress) and must not be used while the sheet is closed.
+for (const d of "1357") window.pinPress(d);
+await new Promise(r => setTimeout(r, 300));
+// This session never stored a phone number, so a correct unlock lands on the
+// name/phone form (a real signed-in device goes straight to the app shell).
+ok("the right PIN unlocks the idle-locked app",
     hidden("lock-screen") === true && hidden("login-screen") === false,
     "lock=" + hidden("lock-screen") + " login=" + hidden("login-screen"));
 

@@ -13,7 +13,7 @@
 //
 // NO network call is made anywhere in this file. The phrase is never sent,
 // hashed-for-lookup, or verified against a server — there is no server. Doing
-// the math on-device is what keeps the "No Server · No Trace" promise intact;
+// the math on-device is what keeps the "no account server · no cloud storage" promise intact;
 // a server-side check would leak the phrase to whoever runs it.
 //
 // Consequence, stated plainly in the UI: if the phrase is lost and the device
