@@ -2714,3 +2714,18 @@ select:focus:not(:focus-visible) {
 .peer-empty-actions .online-user-connect {
     flex: 0 0 auto;
 }
+
+/* ---- Optional recovery phrase setup --------------------------------- */
+.phrase-skip-btn {
+    width: 100%;
+    margin-top: 8px;
+    min-height: 40px;
+    font-size: 13px;
+}
+.phrase-skip-note {
+    margin: 6px 0 0;
+    font-size: 11px;
+    line-height: 1.5;
+    text-align: center;
+    color: var(--text3);
+}
