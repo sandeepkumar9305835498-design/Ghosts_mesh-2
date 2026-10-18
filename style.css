@@ -2436,3 +2436,281 @@ select:focus:not(:focus-visible) {
     text-align: center; line-height: 1.5;
     max-width: 300px; margin: 4px 0 0;
 }
+
+/* =====================================================================
+   SAFETY, PRIVACY & CHATS POLISH (App Lock / report / online strip)
+   ===================================================================== */
+
+/* The chat list is a single column. It used to grow past 100% of the
+   viewport when the empty state and a long conversation list disagreed,
+   which could paint the empty card twice side by side on a narrow phone. */
+#chat-list-container {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+}
+#chat-list-container .empty-state {
+    width: 100%;
+    max-width: 100%;
+    flex-direction: column;
+    align-items: center;
+}
+
+/* ---- Online now strip (Chats tab) ---------------------------------- */
+.online-strip {
+    padding: 10px 14px 4px;
+    border-bottom: 1px solid var(--border2);
+}
+.online-strip-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+.online-strip-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.7px;
+    text-transform: uppercase;
+    color: var(--text3);
+}
+.online-strip-all {
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 4px;
+    cursor: pointer;
+}
+.online-strip-list {
+    display: flex;
+    gap: 14px;
+    overflow-x: auto;
+    padding-bottom: 6px;
+    scrollbar-width: none;
+}
+.online-strip-list::-webkit-scrollbar { display: none; }
+.online-strip-item {
+    background: none;
+    border: none;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    min-width: 56px;
+    cursor: pointer;
+    color: var(--text2);
+}
+.online-strip-avatar {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: var(--surface2);
+    border: 2px solid var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    position: relative;
+}
+.online-strip-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.online-strip-avatar svg { color: var(--text3); }
+.online-strip-dot {
+    position: absolute;
+    right: -1px;
+    bottom: -1px;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: var(--success, #22c55e);
+    border: 2px solid var(--bg);
+}
+.online-strip-name {
+    font-size: 10.5px;
+    max-width: 58px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.online-strip-empty {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text3);
+}
+
+/* ---- Profile: device-only note + premium CTA ----------------------- */
+.profile-id-note {
+    margin: 6px 0 0;
+    font-size: 11px;
+    color: #6f6f75;
+    text-align: center;
+}
+.profile-id-copy {
+    color: var(--accent);
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.profile-premium-btn {
+    width: 100%;
+    max-width: 320px;
+    margin-top: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px 16px;
+    border-radius: 12px;
+    border: 1px solid rgba(245, 190, 80, 0.55);
+    background: linear-gradient(135deg, #f7c948, #e8a317);
+    color: #241a00;
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: 0.3px;
+    cursor: pointer;
+    box-shadow: 0 6px 18px rgba(232, 163, 23, 0.22);
+}
+.profile-premium-btn:active { transform: scale(0.98); }
+.profile-premium-star { font-size: 16px; line-height: 1; }
+
+/* Save button no longer sits on top of the name field. */
+#profile-screen .profile-field { position: relative; }
+#profile-screen .profile-field .profile-input {
+    display: block;
+    width: 100%;
+    margin-bottom: 0;
+}
+#profile-screen .profile-field .save-btn {
+    margin-top: 12px;
+    display: block;
+}
+
+/* ---- Recovery phrase: hidden until deliberately revealed ----------- */
+.phrase-warning-strong {
+    color: #ff8a8a;
+    font-weight: 600;
+}
+.phrase-veil {
+    position: relative;
+    border-radius: 12px;
+    overflow: hidden;
+}
+.phrase-veil .phrase-grid {
+    filter: blur(7px);
+    user-select: none;
+    pointer-events: none;
+    transition: filter 0.22s ease;
+    margin-bottom: 0;
+}
+.phrase-veil.revealed .phrase-grid {
+    filter: none;
+    user-select: text;
+    pointer-events: auto;
+}
+.phrase-veil-cover {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    text-align: center;
+    padding: 12px;
+    background: rgba(10, 8, 16, 0.55);
+    color: var(--text2);
+}
+.phrase-veil-cover p {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text);
+}
+.phrase-veil-cover span { font-size: 11px; color: var(--text3); }
+.phrase-veil.revealed .phrase-veil-cover { display: none; }
+.phrase-backup-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+.phrase-backup-actions .phrase-copy-btn { flex: 1; margin-top: 0; }
+
+/* ---- Privacy policy sheet ------------------------------------------ */
+.privacy-box { max-height: 88vh; overflow-y: auto; }
+.privacy-body h5 {
+    margin: 14px 0 4px;
+    font-size: 12px;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: var(--accent);
+}
+.privacy-body p {
+    margin: 0 0 8px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text2);
+}
+
+/* ---- Blocked ghosts ------------------------------------------------ */
+.blocked-list { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.blocked-empty {
+    text-align: center;
+    font-size: 12.5px;
+    color: var(--text3);
+    padding: 14px 6px;
+}
+.blocked-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: var(--bg2);
+    border: 1px solid var(--border2);
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+.blocked-row-name { font-size: 13px; color: var(--text); font-weight: 600; }
+.blocked-row-sub { font-size: 11px; color: var(--text3); }
+.blocked-unblock-btn {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 7px 12px;
+    cursor: pointer;
+}
+
+/* ---- Call battery saver -------------------------------------------- */
+.call-ctrl-btn.battery-on {
+    background: rgba(34, 197, 94, 0.45);
+}
+
+/* ---- Premium plan cards -------------------------------------------- */
+.plan-permonth {
+    display: block;
+    font-size: 10.5px;
+    line-height: 1.35;
+    color: var(--text3);
+    margin-top: 2px;
+}
+.plan-badge.founder-badge {
+    background: linear-gradient(135deg, #f7c948, #e8a317);
+    color: #241a00;
+}
+
+/* ---- Empty reachable list: two offline pairing actions -------------- */
+.peer-empty-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+    margin-top: 10px;
+}
+.peer-empty-actions .online-user-connect {
+    flex: 0 0 auto;
+}

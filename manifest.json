@@ -1,7 +1,7 @@
 {
   "name": "Ghost Mesh",
   "short_name": "GhostMesh",
-  "description": "Secure P2P Messenger — No Server, No Trace",
+  "description": "Privacy-first P2P Messenger — End-to-End Encrypted, Direct Device-to-Device",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

@@ -62,7 +62,33 @@ function sendToChat(chatId, payload) {
 let offlinePeerConnections = {};
 let activeOfflineCallPeer = null, activeOfflineCallType = null;
 
-const bannedWords = ["blackmail","paisa do","rupay do","video leak","threat","leak"];
+// ===== SAFETY FILTER =====
+// Deliberately about abuse, not opinions: threats, sexual content involving
+// minors, explicit sexual solicitation, doxxing and extortion. The matcher
+// folds common leetspeak/spacing tricks before comparing, and it runs on both
+// outgoing and incoming text (see sendMessage / the "chat" handler).
+const bannedWords = [
+    "blackmail", "extortion", "paisa do", "paise do", "rupay do", "paisa bhej",
+    "video leak", "leak kar dunga", "mms leak", "i will leak", "kill you", "jaan se mar",
+    "rape", "balatkar", "child porn", "cp video", "nude child",
+    "send nudes", "nudes bhej", "sex chat", "oral sex", "blowjob", "handjob",
+    "porn video", "xxx video", "chudai", "lund bhej", "gand bhej"
+];
+const SAFETY_FOLD = { "0": "o", "1": "i", "!": "i", "3": "e", "4": "a", "5": "s", "$": "s", "7": "t", "@": "a" };
+function gmNormaliseForSafety(text) {
+    return String(text || "").toLowerCase()
+        .replace(/[01!3457$@]/g, ch => SAFETY_FOLD[ch] || ch)
+        .replace(/[^a-z\u0900-\u097F ]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+// Returns { blocked, term } so callers control the message they show.
+function gmSafetyCheck(text) {
+    const t = gmNormaliseForSafety(text);
+    if (!t) return { blocked: false, term: "" };
+    const term = bannedWords.find(w => t.includes(w));
+    return term ? { blocked: true, term } : { blocked: false, term: "" };
+}
 
 // ===== SAFE STORAGE =====
 const safeStorage = {
@@ -171,6 +197,42 @@ function initApp() {
     }
     loadTheme();
     requestPermissions();
+    gmStartSessionGuard();
+}
+
+// ===== SESSION TIMEOUT =====
+// Five idle minutes with an App Lock PIN set puts the lock screen back up, so
+// a phone left on a table does not stay open. Any interaction restarts the
+// countdown; without a PIN there is nothing to lock and the guard stays off.
+const GM_SESSION_IDLE_MS = 5 * 60 * 1000;
+let gmSessionTimer = null;
+function gmStartSessionGuard() {
+    if (gmSessionTimer) clearTimeout(gmSessionTimer);
+    gmSessionTimer = null;
+    if (!gmAppLockHasPin()) return;
+    gmSessionTimer = setTimeout(gmLockSession, GM_SESSION_IDLE_MS);
+    if (!window.__gmSessionWired) {
+        window.__gmSessionWired = true;
+        ["pointerdown", "keydown", "touchstart", "input"].forEach(ev =>
+            document.addEventListener(ev, gmSessionTouch, { passive: true }));
+    }
+}
+function gmSessionTouch() {
+    if (!gmSessionTimer || !gmAppLockHasPin()) return;
+    clearTimeout(gmSessionTimer);
+    gmSessionTimer = setTimeout(gmLockSession, GM_SESSION_IDLE_MS);
+}
+function gmLockSession() {
+    if (!gmAppLockHasPin()) return;
+    clearTimeout(gmSessionTimer);
+    gmSessionTimer = null;
+    pinBuffer = "";
+    renderPinDots();
+    gmBlurPhraseBackup();
+    closeAllMenus();
+    ["app-shell", "login-screen", "chat-screen", "profile-screen", "settings-sheet", "premium-modal", "privacy-modal", "blocked-modal"]
+        .forEach(hideEl);
+    showEl("lock-screen");
 }
 
 function requestPermissions() {
@@ -213,8 +275,70 @@ function pinBackspace() { pinBuffer = pinBuffer.slice(0,-1); updatePinDots(); }
 function updatePinDots() {
     document.querySelectorAll("#pin-dots span").forEach((s,i) => s.classList.toggle("filled", i < pinBuffer.length));
 }
+// ===== PIN HASHING & LOCKOUT =====
+// The PIN is never stored as typed. gm_pin holds sha256("ghost-mesh-pin|<pin>")
+// and gm_pin_hashed marks a hashed value; a PIN saved by an older build is
+// still plain text, so the first successful unlock upgrades it in place
+// instead of locking the owner out. Five wrong tries in a row lock the PIN
+// pad for 30 seconds (persisted, so killing the app does not reset it).
+const GM_PIN_MAX_FAILS = 5;
+const GM_PIN_LOCK_MS = 30 * 1000;
+function gmPinDigest(pin) {
+    const raw = "ghost-mesh-pin|" + String(pin);
+    if (typeof GMIdentity !== "undefined" && typeof GMIdentity.sha256Hex === "function") {
+        return GMIdentity.sha256Hex(raw);
+    }
+    // gm-identity.js is what failed to load — keep a stable digest rather than
+    // ever falling back to storing the raw PIN.
+    let h1 = 0x811c9dc5, h2 = 0xc2b2ae35;
+    for (let i = 0; i < raw.length; i++) {
+        const c = raw.charCodeAt(i);
+        h1 = Math.imul(h1 ^ c, 16777619) >>> 0;
+        h2 = Math.imul(h2 ^ c, 2246822519) >>> 0;
+    }
+    return "fb" + h1.toString(16).padStart(8, "0") + h2.toString(16).padStart(8, "0");
+}
+function gmPinIsHashed() { return safeStorage.get("gm_pin_hashed") === "1"; }
+function gmStorePin(pin) {
+    safeStorage.set("gm_pin", gmPinDigest(pin));
+    safeStorage.set("gm_pin_hashed", "1");
+    safeStorage.set("gm_pin_length", String(String(pin).length));
+    gmPinResetFails();
+}
+function gmPinMatches(pin) {
+    const saved = safeStorage.get("gm_pin");
+    if (!saved) return false;
+    if (gmPinIsHashed()) return saved === gmPinDigest(pin);
+    if (saved === String(pin)) { gmStorePin(pin); return true; }   // upgrade legacy PIN
+    return false;
+}
+function gmPinFails() { return parseInt(safeStorage.get("gm_pin_fails") || "0", 10) || 0; }
+function gmPinLockedUntil() { return parseInt(safeStorage.get("gm_pin_locked_until") || "0", 10) || 0; }
+function gmPinLockRemaining() { return Math.max(0, gmPinLockedUntil() - Date.now()); }
+function gmPinResetFails() { safeStorage.del("gm_pin_fails"); safeStorage.del("gm_pin_locked_until"); }
+function gmPinRegisterFail() {
+    const n = gmPinFails() + 1;
+    if (n >= GM_PIN_MAX_FAILS) {
+        safeStorage.set("gm_pin_locked_until", String(Date.now() + GM_PIN_LOCK_MS));
+        safeStorage.set("gm_pin_fails", "0");
+        return GM_PIN_MAX_FAILS;
+    }
+    safeStorage.set("gm_pin_fails", String(n));
+    return n;
+}
+function gmPinLockToast() {
+    return "Too many wrong PINs — try again in " + Math.ceil(gmPinLockRemaining() / 1000) + "s";
+}
+
 function checkPin() {
-    if (pinBuffer === safeStorage.get("gm_pin")) {
+    if (gmPinLockRemaining() > 0) {
+        pinBuffer = "";
+        updatePinDots();
+        showToast(gmPinLockToast());
+        return;
+    }
+    if (gmPinMatches(pinBuffer)) {
+        gmPinResetFails();
         pinBuffer = "";
         updatePinDots();
         hideEl("lock-screen");
@@ -222,9 +346,11 @@ function checkPin() {
         if (phone) gmEnsureIdentityThen(() => executeLogin(phone, safeStorage.get("gm_name")||""));
         else showEl("login-screen");
     } else {
+        const fails = gmPinRegisterFail();
         pinBuffer = "";
         updatePinDots();
-        showToast("Wrong PIN. Try again.");
+        if (gmPinLockRemaining() > 0) showToast(gmPinLockToast());
+        else showToast("Wrong PIN. Try again. (" + (GM_PIN_MAX_FAILS - fails) + " left)");
     }
 }
 
@@ -282,6 +408,7 @@ function executeLogin(phone, name) {
     requestNotificationPermission();
     startOnlinePresenceBroadcast();
     gmStartNativeDiscovery();
+    gmStartSessionGuard();
 
     // FIX: app must be fully usable with zero internet. If there's no
     // connection, Online mode (PeerJS cloud) simply can't reach its
@@ -311,6 +438,7 @@ function updateHeaderDisplay() {
 function updateProfileScreen() {
     const nameInput = document.getElementById("profile-name-input");
     if (nameInput) nameInput.value = userDisplayName;
+    document.getElementById("profile-save-btn")?.classList.add("hidden");
     const gid = document.getElementById("profile-ghost-id");
     if (gid) gid.innerText = userGhostID;
     const ph = document.getElementById("profile-phone");
@@ -706,12 +834,19 @@ function goBackToList() {
 }
 
 // ===== PROFILE ACTIONS =====
+// The Save button only exists while the name is actually edited; it used to
+// sit on top of the input at all times, which looked like a broken form.
+function gmProfileNameDirty() {
+    document.getElementById("profile-save-btn")?.classList.remove("hidden");
+}
 function saveDisplayName() {
     const n = document.getElementById("profile-name-input").value.trim();
     if (!n) { showToast("Enter a name"); return; }
     userDisplayName = n;
     safeStorage.set("gm_name", n);
     updateHeaderDisplay();
+    updateProfileScreen();
+    document.getElementById("profile-save-btn")?.classList.add("hidden");
     broadcastToMesh({ type: "name-update", sender: userGhostID, displayName: n });
     showToast("Name saved!");
 }
@@ -724,6 +859,29 @@ function saveStatus() {
 
 function copyGhostID() {
     navigator.clipboard?.writeText(userGhostID).then(() => showToast("Ghost ID copied!")).catch(() => showToast(userGhostID));
+}
+
+// ===== PRIVACY POLICY & RECOVERY-PHRASE REVEAL =====
+function openPrivacyPolicy() { closeAllMenus(); closeSettingsSheet(); showEl("privacy-modal"); }
+function closePrivacyPolicy() { hideEl("privacy-modal"); }
+
+// The 12-word phrase is blurred until the owner deliberately reveals it — a
+// shoulder-surf, a screenshot or a screen share should not leak the seed.
+function gmTogglePhraseReveal() {
+    const veil = document.getElementById("phrase-backup-veil");
+    if (!veil) return;
+    const on = veil.classList.toggle("revealed");
+    const label = document.getElementById("phrase-backup-reveal-label");
+    if (label) label.innerText = on ? "Hide" : "Reveal";
+    const btn = document.getElementById("phrase-backup-reveal-btn");
+    if (btn) btn.setAttribute("aria-label", on ? "Hide the recovery phrase" : "Reveal the recovery phrase");
+}
+function gmBlurPhraseBackup() {
+    const veil = document.getElementById("phrase-backup-veil");
+    if (!veil) return;
+    veil.classList.remove("revealed");
+    const label = document.getElementById("phrase-backup-reveal-label");
+    if (label) label.innerText = "Reveal";
 }
 
 function triggerDPUpload() { document.getElementById("dp-file-input").click(); }
@@ -1166,6 +1324,12 @@ function setupConn(conn) {
 
             case "chat": {
                 if (blockedPeers.has(data.sender)) break; // FIX 8: ignore blocked
+                // Incoming text is filtered too — blocking a bad sender on the
+                // other side is pointless if the message already renders here.
+                if ((data.contentType === "text" || !data.contentType) && gmSafetyCheck(data.text).blocked) {
+                    showToast("Blocked an incoming message that broke the safety rules");
+                    break;
+                }
                 const chatId = data.groupId || data.sender;
                 if (data.groupId && !groups[data.groupId]) break; // unknown group — ignore
                 if (!chatData[chatId]) initChatData(chatId);
@@ -1184,8 +1348,11 @@ function setupConn(conn) {
                     chatData[chatId].unread = (chatData[chatId].unread || 0) + 1;
                 } else {
                     renderMessage(msg);
-                    if (data.selfDestruct > 0) scheduleDestruct(data.msgId, data.selfDestruct, chatId);
                 }
+                // The timer starts even when the chat is closed — otherwise a
+                // self-destructing message waited in chatData until the person
+                // happened to open that conversation.
+                if (data.selfDestruct > 0) scheduleDestruct(data.msgId, data.selfDestruct, chatId);
                 renderChatList();
                 if (conn.open) conn.send({ type: "ack", msgId: data.msgId });
                 if (navigator.vibrate && notificationsEnabled && !chatMuted[chatId]) navigator.vibrate(50);
@@ -1251,7 +1418,17 @@ function setupConn(conn) {
 
             case "reaction": renderReactionLocal(data.msgId, data.emoji); break;
             case "delete": renderDeleteLocal(data.msgId); break;
-            case "destruct": renderDeleteLocal(data.msgId); break;
+            case "destruct": {
+                Object.keys(chatData).forEach(k => gmForgetMessage(k, data.msgId));
+                renderDeleteLocal(data.msgId);
+                break;
+            }
+
+            case "view-once-opened": {
+                Object.keys(chatData).forEach(k => gmForgetMessage(k, data.msgId));
+                renderDeleteLocal(data.msgId);
+                break;
+            }
 
             case "credit-gift": {
                 addCredits(data.amount || 0);
@@ -1394,9 +1571,13 @@ function renderPeopleListInto(containerId, peers) {
     const list = document.getElementById(containerId);
     if (!list) return 0;
     if (!peers.length) {
-        // This list lives on the WiFi tab now, so the hint has to describe the
-        // pairing actions on THIS screen instead of sending the user elsewhere.
-        list.innerHTML = '<div class="peer-empty">Nobody reachable yet — show your QR, or scan a friend\'s to pair.</div>';
+        // The empty state carries the two offline pairing actions, so a
+        // first-time user is never told "nobody here" without a way forward.
+        list.innerHTML = '<div class="peer-empty">Nobody reachable yet — pair two phones directly, no internet needed.'
+            + '<div class="peer-empty-actions">'
+            + '<button class="online-user-connect" onclick="startOfflineHost()">Show My QR</button>'
+            + '<button class="online-user-connect" onclick="startOfflineJoinScan()">Scan Friend\'s QR</button>'
+            + '</div></div>';
         return 0;
     }
     list.innerHTML = "";
@@ -1442,7 +1623,57 @@ function renderPeerLists() {
 }
 
 function renderOnlineUsers() {
-    return renderPeerLists();
+    const n = renderPeerLists();
+    gmRenderOnlineStrip();
+    return n;
+}
+
+// "Online now" strip on the Chats tab: only peers whose presence is live
+// right now (onlineUsers), never the offline history list.
+function gmRenderOnlineStrip() {
+    const list = document.getElementById("online-strip-list");
+    const empty = document.getElementById("online-strip-empty");
+    if (!list) return;
+    const ids = Object.keys(onlineUsers).filter(id => onlineUsers[id] && onlineUsers[id].online && !blockedPeers.has(id));
+    list.innerHTML = "";
+    if (!ids.length) {
+        if (empty) empty.classList.remove("hidden");
+        return;
+    }
+    if (empty) empty.classList.add("hidden");
+    const personSvg = '<svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>';
+    ids.slice(0, 20).forEach(id => {
+        const info = onlineUsers[id];
+        const name = info.displayName || id;
+        const dp = chatData[id]?.dp;
+        const connected = activeConnections.some(c => c.peer === id && c.open);
+        const btn = document.createElement("button");
+        btn.className = "online-strip-item";
+        btn.setAttribute("aria-label", "Chat with " + name);
+        const avatar = document.createElement("span");
+        avatar.className = "online-strip-avatar";
+        if (dp) {
+            const img = document.createElement("img");
+            img.src = dp;
+            img.alt = "";
+            avatar.appendChild(img);
+        } else {
+            avatar.innerHTML = personSvg;
+        }
+        const dot = document.createElement("span");
+        dot.className = "online-strip-dot";
+        avatar.appendChild(dot);
+        const caption = document.createElement("span");
+        caption.className = "online-strip-name";
+        caption.textContent = name;
+        btn.appendChild(avatar);
+        btn.appendChild(caption);
+        btn.addEventListener("click", () => {
+            if (connected || chatData[id]) openChat(id);
+            else connectToPeer(id);
+        });
+        list.appendChild(btn);
+    });
 }
 
 // ===== CONNECT =====
@@ -1560,7 +1791,7 @@ function submitFeedback() {
     const text = document.getElementById("feedback-text").value.trim();
     if (feedbackRating === 0 && !text) { showToast("Add a rating or a note first"); return; }
 
-    // No server to send this to — Ghost Mesh stays "No Server, No Trace".
+    // There is no server to send this to — Ghost Mesh stays local-only.
     // Keep a local copy, and hand the person off to their own email app to
     // actually deliver it if they want to.
     try {
@@ -2223,13 +2454,25 @@ function stopOfflineCamera() {
 }
 
 // ===== CHAT LIST =====
+// There is one empty card. A second copy (pasted markup, or a renderer that
+// appended instead of replacing) used to show up side by side on a narrow
+// screen; this collapses any extra copies before drawing the list.
+function gmEnsureSingleEmptyState() {
+    const container = document.getElementById("chat-list-container");
+    if (!container) return null;
+    const states = Array.from(container.querySelectorAll(".empty-state"));
+    states.slice(1).forEach(el => el.remove());
+    return states[0] || null;
+}
+
 function renderChatList() {
     const container = document.getElementById("chat-list-container");
-    const empty = document.getElementById("empty-state");
+    const empty = gmEnsureSingleEmptyState();
+    gmRenderOnlineStrip();
     const peers = Object.keys(chatData);
+    container.querySelectorAll(".chat-item").forEach(e => e.remove());
     if (peers.length === 0) { if(empty) empty.style.display = "flex"; return; }
     if (empty) empty.style.display = "none";
-    container.querySelectorAll(".chat-item").forEach(e => e.remove());
 
     peers.sort((a,b) => (chatData[b].lastTime||"").localeCompare(chatData[a].lastTime||""));
     peers.forEach(peerId => {
@@ -2326,6 +2569,7 @@ function openChat(peerId) {
         document.getElementById("chat-voice-call-btn")?.classList.add("hidden");
         document.getElementById("chat-video-call-btn")?.classList.add("hidden");
         document.getElementById("block-peer-menu-item")?.classList.add("hidden");
+        document.getElementById("report-peer-menu-item")?.classList.add("hidden");
         document.getElementById("disconnect-peer-menu-item")?.classList.add("hidden");
         document.getElementById("leave-group-menu-item")?.classList.remove("hidden");
     } else {
@@ -2339,6 +2583,7 @@ function openChat(peerId) {
         document.getElementById("chat-voice-call-btn")?.classList.remove("hidden");
         document.getElementById("chat-video-call-btn")?.classList.remove("hidden");
         document.getElementById("block-peer-menu-item")?.classList.remove("hidden");
+        document.getElementById("report-peer-menu-item")?.classList.remove("hidden");
         document.getElementById("disconnect-peer-menu-item")?.classList.remove("hidden");
         document.getElementById("leave-group-menu-item")?.classList.add("hidden");
     }
@@ -2431,13 +2676,12 @@ function sendMessage() {
 
     if (editMessageId) { saveEditedMessage(editMessageId, txt); return; }
 
-    for (const w of bannedWords) {
-        if (txt.toLowerCase().includes(w)) {
-            showToast("Message blocked by safety filter");
-            inp.value = "";
-            updateComposerButtons();
-            return;
-        }
+    const safety = gmSafetyCheck(txt);
+    if (safety.blocked) {
+        showToast("Message blocked by the safety filter — threats, sexual content and extortion are not allowed");
+        inp.value = "";
+        updateComposerButtons();
+        return;
     }
 
     if (!currentChatPeer) {
@@ -2544,6 +2788,7 @@ function renderMessage(msg) {
             txtNode.innerText = msg.text;
             txtNode.style.cssText = "";
             renderMedia(txtNode, msg.contentType, msg.mediaPayload);
+            gmConsumeViewOnce(msg, card);
         };
     } else {
         txtNode.innerText = msg.text;
@@ -2725,9 +2970,41 @@ function renderMedia(node, type, payload) {
 
 function scheduleDestruct(msgId, seconds, chatId) {
     setTimeout(() => {
+        // Delete the message itself, not just its bubble: a timer that only
+        // painted "Message deleted" left the text in chatData, where re-opening
+        // or re-rendering the chat brought it back.
+        gmForgetMessage(chatId, msgId);
         renderDeleteLocal(msgId);
         sendToChat(chatId, { type: "destruct", msgId, groupId: isGroupChat(chatId) ? chatId : undefined });
     }, seconds * 1000);
+}
+function gmForgetMessage(chatId, msgId) {
+    const store = chatData[chatId];
+    if (!store || !Array.isArray(store.messages)) return false;
+    const idx = store.messages.findIndex(m => m.id === msgId);
+    if (idx < 0) return false;
+    store.messages.splice(idx, 1);
+    return true;
+}
+
+// View Once is genuinely one look: the bubble opens, the message is dropped
+// from the local store, and the sender is told to drop their copy too.
+function gmConsumeViewOnce(msg, card) {
+    const chatId = currentChatPeer;
+    gmForgetMessage(chatId, msg.id);
+    sendToChat(chatId, {
+        type: "view-once-opened", sender: userGhostID, msgId: msg.id,
+        groupId: isGroupChat(chatId) ? chatId : undefined
+    });
+    setTimeout(() => {
+        if (!card || !card.isConnected) return;
+        card.innerHTML = "";
+        const gone = document.createElement("div");
+        gone.className = "msg-text-content";
+        gone.innerText = "Opened — this message is gone";
+        gone.style.cssText = "color:var(--text3);font-style:italic;";
+        card.appendChild(gone);
+    }, 1500);
 }
 
 function setSelfDestruct(s) {
@@ -2945,21 +3222,51 @@ function renderDeleteLocal(msgId) {
 }
 
 // ===== CHAT MENU ACTIONS =====
+// Live location is OFF by default: nothing is read or sent until the person
+// confirms a share, it updates once a minute, and it stops by itself after 15
+// minutes (or immediately when the same menu item is tapped again).
+const GM_LIVE_LOCATION_MS = 15 * 60 * 1000;
+let gmLiveLocationTimer = null;
+let gmLiveLocationStopTimer = null;
+let gmLiveLocationPeer = null;
+function gmSendLiveLocationPing(first) {
+    if (!gmLiveLocationPeer || !navigator.geolocation) return;
+    const chatId = gmLiveLocationPeer;
+    navigator.geolocation.getCurrentPosition(pos => {
+        const lat = pos.coords.latitude, lng = pos.coords.longitude;
+        sendToChat(chatId, { type: "location", sender: userGhostID, senderName: userDisplayName, lat, lng, senderDP: userCurrentDP, groupId: isGroupChat(chatId) ? chatId : undefined });
+        if (!chatData[chatId]) initChatData(chatId);
+        const lm = { id: "loc-"+Date.now(), sender: userGhostID, text: "", direction: "outgoing", dp: userCurrentDP, contentType: "location", mediaPayload: { lat, lng }, time: nowTime() };
+        chatData[chatId].messages.push(lm);
+        if (currentChatPeer === chatId) renderMessage(lm);
+        if (first) showToast("Live location on for 15 min — tap Share Location again to stop");
+    }, () => {
+        if (first) { showToast("Location permission denied"); stopLiveLocation(true); }
+    }, { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 });
+}
+function stopLiveLocation(silent) {
+    if (gmLiveLocationTimer) clearInterval(gmLiveLocationTimer);
+    if (gmLiveLocationStopTimer) clearTimeout(gmLiveLocationStopTimer);
+    gmLiveLocationTimer = null;
+    gmLiveLocationStopTimer = null;
+    gmLiveLocationPeer = null;
+    liveLocationInterval = null;
+    if (!silent) showToast("Live location stopped");
+}
 function shareLiveLocation() {
     closeAllMenus();
-    navigator.geolocation?.getCurrentPosition(pos => {
-        const lat = pos.coords.latitude, lng = pos.coords.longitude;
-        sendToChat(currentChatPeer, { type: "location", sender: userGhostID, senderName: userDisplayName, lat, lng, senderDP: userCurrentDP, groupId: isGroupChat(currentChatPeer) ? currentChatPeer : undefined });
-        // Show it on our own side too — sendToChat only transmits, it never
-        // renders locally.
-        if (currentChatPeer) {
-            const lm = { id: "loc-"+Date.now(), sender: userGhostID, text: "", direction: "outgoing", dp: userCurrentDP, contentType: "location", mediaPayload: { lat, lng }, time: nowTime() };
-            if (!chatData[currentChatPeer]) initChatData(currentChatPeer);
-            chatData[currentChatPeer].messages.push(lm);
-            renderMessage(lm);
-        }
-        showToast("Live location shared for 15 min");
-    }, () => showToast("Location permission denied"));
+    if (!currentChatPeer) { showToast("Open a chat first"); return; }
+    if (gmLiveLocationTimer) { stopLiveLocation(false); return; }
+    const chatId = currentChatPeer;
+    gmConfirm("Share your live location with this chat for 15 minutes? It is off by default — nothing is read or sent until you allow it.", () => {
+        gmLiveLocationPeer = chatId;
+        gmSendLiveLocationPing(true);
+        liveLocationInterval = gmLiveLocationTimer = setInterval(() => gmSendLiveLocationPing(false), 60000);
+        gmLiveLocationStopTimer = setTimeout(() => {
+            stopLiveLocation(true);
+            showToast("Live location sharing ended");
+        }, GM_LIVE_LOCATION_MS);
+    }, { title: "Share live location", confirmLabel: "Share for 15 min" });
 }
 function clearCurrentChat() {
     closeAllMenus();
@@ -2981,22 +3288,104 @@ function clearAllChats() {
 }
 let blockedPeers = new Set();
 
+// One place that actually blocks someone, shared by "Block", "Report abuse"
+// and the blocked list. Incoming connections, calls and chats all consult
+// blockedPeers, so blocking here is enough to cut every path.
+function gmBlockPeer(peerId) {
+    if (!peerId) return;
+    blockedPeers.add(peerId);
+    safeStorage.set("gm_blocked", JSON.stringify([...blockedPeers]));
+    const conn = activeConnections.find(c => c.peer === peerId);
+    if (conn) { try { conn.close(); } catch(e){} }
+    activeConnections = activeConnections.filter(c => c.peer !== peerId);
+    delete chatData[peerId];
+    delete onlineUsers[peerId];
+    renderChatList();
+    gmSyncBlockedCount();
+}
+
 function blockCurrentPeer() {
     closeAllMenus();
     if (!currentChatPeer) return;
+    if (isGroupChat(currentChatPeer)) { showToast("Leave the group instead"); return; }
     const peerId = currentChatPeer;
     gmConfirm("Block " + peerId + "? They can no longer reach you.", () => {
-        // Add to the blocked set, close the connection, drop the chat
-        blockedPeers.add(peerId);
-        safeStorage.set("gm_blocked", JSON.stringify([...blockedPeers]));
-        const conn = activeConnections.find(c => c.peer === peerId);
-        if (conn) { try { conn.close(); } catch(e){} }
-        activeConnections = activeConnections.filter(c => c.peer !== peerId);
-        delete chatData[peerId];
-        delete onlineUsers[peerId];
+        gmBlockPeer(peerId);
         goBackToList();
         showToast(peerId + " blocked");
     }, { title: "Block Ghost", confirmLabel: "Block" });
+}
+
+// ===== REPORT ABUSE =====
+// Reporting is deliberately local-only (there is no server to send it to): the
+// report is kept on this phone for the owner's record and the offender is
+// blocked in the same step, which is the part that actually protects them.
+function gmRecordReport(peerId, reason) {
+    let reports = [];
+    try { reports = JSON.parse(safeStorage.get("gm_reports") || "[]"); } catch (e) { reports = []; }
+    reports.unshift({ peer: peerId, reason: reason || "user-report", at: Date.now() });
+    safeStorage.set("gm_reports", JSON.stringify(reports.slice(0, 50)));
+}
+function reportCurrentPeer() {
+    closeAllMenus();
+    if (!currentChatPeer) return;
+    if (isGroupChat(currentChatPeer)) { showToast("Open a person's chat to report them"); return; }
+    const peerId = currentChatPeer;
+    gmConfirm("Report " + peerId + " for abuse? The report stays on this phone and they are blocked immediately.", () => {
+        gmRecordReport(peerId, "user-report");
+        gmBlockPeer(peerId);
+        goBackToList();
+        showToast("Report saved — " + peerId + " blocked");
+    }, { title: "Report abuse", confirmLabel: "Report & block" });
+}
+
+function gmSyncBlockedCount() {
+    const el = document.getElementById("blocked-count");
+    if (el) el.innerText = String(blockedPeers.size);
+}
+
+function openBlockedList() {
+    closeAllMenus();
+    gmRenderBlockedList();
+    showEl("blocked-modal");
+}
+function closeBlockedList() { hideEl("blocked-modal"); }
+function gmRenderBlockedList() {
+    const list = document.getElementById("blocked-list");
+    if (!list) return;
+    if (!blockedPeers.size) {
+        list.innerHTML = '<div class="blocked-empty">Nobody is blocked.</div>';
+        return;
+    }
+    list.innerHTML = "";
+    [...blockedPeers].forEach(peerId => {
+        const row = document.createElement("div");
+        row.className = "blocked-row";
+        const name = document.createElement("div");
+        const title = document.createElement("div");
+        title.className = "blocked-row-name";
+        title.textContent = chatData[peerId]?.displayName || peerId;
+        const sub = document.createElement("div");
+        sub.className = "blocked-row-sub";
+        sub.textContent = peerId;
+        name.appendChild(title);
+        name.appendChild(sub);
+        const btn = document.createElement("button");
+        btn.className = "blocked-unblock-btn";
+        btn.textContent = "Unblock";
+        btn.setAttribute("aria-label", "Unblock " + peerId);
+        btn.addEventListener("click", () => unblockPeer(peerId));
+        row.appendChild(name);
+        row.appendChild(btn);
+        list.appendChild(row);
+    });
+}
+function unblockPeer(peerId) {
+    blockedPeers.delete(peerId);
+    safeStorage.set("gm_blocked", JSON.stringify([...blockedPeers]));
+    gmSyncBlockedCount();
+    gmRenderBlockedList();
+    showToast(peerId + " unblocked");
 }
 
 function loadBlockedPeers() {
@@ -3004,6 +3393,7 @@ function loadBlockedPeers() {
         const saved = safeStorage.get("gm_blocked");
         if (saved) blockedPeers = new Set(JSON.parse(saved));
     } catch(e) { blockedPeers = new Set(); }
+    gmSyncBlockedCount();
 }
 function disconnectCurrentPeer() { closeAllMenus(); const conn=activeConnections.find(c=>c.peer===currentChatPeer); if(conn) conn.close(); goBackToList(); showToast("Disconnected"); }
 
@@ -3476,6 +3866,7 @@ function endCurrentCall() {
 }
 
 function endCallFlow() {
+    gmResetBatterySaver();
     stopRingtone();
     playRingtone('end');
     stopCallTimer();
@@ -3521,6 +3912,36 @@ function startCallTimer() {
 }
 
 function stopCallTimer() { clearInterval(callTimerInterval); callSeconds = 0; }
+
+// ===== LOW BATTERY MODE (calls) =====
+// Pausing the outgoing video track removes the encoder work and most of the
+// radio traffic while keeping the audio call up. Incoming video is left alone
+// so a battery-saver call still hears the other side.
+let gmLowBatteryMode = false;
+function gmApplyBatterySaver(on) {
+    if (localMediaStream) {
+        localMediaStream.getVideoTracks().forEach(track => { track.enabled = !on; });
+    }
+    const btn = document.getElementById("call-battery-btn");
+    if (btn) {
+        btn.classList.toggle("battery-on", on);
+        btn.setAttribute("aria-label", on ? "Turn off low battery mode" : "Turn on low battery mode");
+    }
+    const localVid = document.getElementById("local-video");
+    if (localVid) localVid.classList.toggle("hidden", on);
+}
+function toggleLowBatteryMode() {
+    gmLowBatteryMode = !gmLowBatteryMode;
+    gmApplyBatterySaver(gmLowBatteryMode);
+    showToast(gmLowBatteryMode
+        ? "Battery saver on — video paused, audio continues"
+        : "Battery saver off — video resumed");
+}
+function gmResetBatterySaver() {
+    if (!gmLowBatteryMode) return;
+    gmLowBatteryMode = false;
+    gmApplyBatterySaver(false);
+}
 
 function toggleMute() {
     isMuted = !isMuted;
@@ -3823,6 +4244,7 @@ function gmSyncSettingsHeader() {
     if (idEl) idEl.innerText = userGhostID || "Ghost-XXXXXX";
     setAvatarDisplay("settings-avatar", userCurrentDP);
     gmAppLockRefreshStatus();
+    gmSyncBlockedCount();
 }
 function openSettingsSheet() { closeAllMenus(); gmSyncSettingsHeader(); showEl("settings-sheet"); }
 function closeSettingsSheet() { hideEl("settings-sheet"); }
@@ -3918,14 +4340,20 @@ function gmAppLockComplete() {
     const entered = gmAppLockBuffer;
     gmAppLockBuffer = "";
     if (gmAppLockMode === "check") {
-        if (entered !== safeStorage.get("gm_pin")) {
+        if (!gmPinMatches(entered)) {
+            const fails = gmPinRegisterFail();
             gmAppLockPaintDots();
-            showToast("Wrong current PIN");
+            if (gmPinLockRemaining() > 0 || fails >= GM_PIN_MAX_FAILS) showToast(gmPinLockToast());
+            else showToast("Wrong current PIN");
             return;
         }
+        gmPinResetFails();
         if (gmAppLockNext === "remove") {
             safeStorage.del("gm_pin");
+            safeStorage.del("gm_pin_hashed");
+            gmPinResetFails();
             gmAppLockRefreshStatus();
+            gmStartSessionGuard();
             closeAppLockSheet();
             showToast("PIN removed");
             return;
@@ -3951,10 +4379,11 @@ function gmAppLockComplete() {
         showToast("PINs do not match");
         return;
     }
-    safeStorage.set("gm_pin", entered);
-    safeStorage.set("gm_pin_length", "4");
+    // Stored as a SHA-256 digest, never as the four digits themselves.
+    gmStorePin(entered);
     gmAppLockNewPin = "";
     gmAppLockRefreshStatus();
+    gmStartSessionGuard();
     closeAppLockSheet();
     showToast("PIN set");
 }
@@ -4026,6 +4455,9 @@ function renderCreditsUI() {
         const star = '<svg viewBox="0 0 24 24" fill="currentColor" width="11" height="11"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>';
         premiumBtn.innerHTML = star + (isPremiumUnlocked() ? " Premium Active" : " Premium");
     }
+
+    const profilePremiumLabel = document.getElementById("profile-premium-label");
+    if (profilePremiumLabel) profilePremiumLabel.innerText = isPremiumUnlocked() ? "Premium active" : "Premium";
 
     // Highlight the currently active plan (if any) in the plans grid
     document.querySelectorAll(".premium-plan-btn").forEach(btn => btn.classList.remove("plan-active"));
@@ -4149,30 +4581,87 @@ function unlockPremiumTrial() {
     closePremiumModal();
 }
 
-// Plans unlock on-device today (free during launch). This same table is
-// what the Play Billing integration reads once billing goes live in the
-// store release.
+// ----- Premium plans (INR) -----
+// ₹99 / ₹399 / ₹599, with the per-month figure spelled out so the longer plan
+// saves money honestly (₹33 and ₹50 a month respectively).
 const PREMIUM_PLANS = {
-    monthly: { label: "1 Month", price: "$5", days: 30 },
-    "6month": { label: "6 Months", price: "$30", days: 182 },
-    yearly:  { label: "1 Year", price: "$50", days: 365 }
+    monthly: { label: "1 Month", price: "₹99", amountPaise: 9900, months: 1, days: 30 },
+    "6month": { label: "6 Months", price: "₹399", amountPaise: 39900, months: 6, days: 182 },
+    yearly:  { label: "1 Year", price: "₹599", amountPaise: 59900, months: 12, days: 365, founder: true }
 };
+
+// Razorpay checkout is only attempted when a publishable key is configured
+// (<meta name="gm-razorpay-key" content="rzp_test_..."> or window.GM_RAZORPAY_KEY_ID).
+// With no key the app keeps its honest launch behaviour: the plan activates on
+// this device and nothing is charged.
+function gmRazorpayKey() {
+    const meta = document.querySelector('meta[name="gm-razorpay-key"]');
+    return String((window.GM_RAZORPAY_KEY_ID || (meta && meta.content) || "")).trim();
+}
+function gmLoadRazorpay() {
+    if (window.Razorpay) return Promise.resolve(true);
+    if (window.__gmRazorpayLoading) return window.__gmRazorpayLoading;
+    window.__gmRazorpayLoading = new Promise(resolve => {
+        const s = document.createElement("script");
+        s.src = "https://checkout.razorpay.com/v1/checkout.js";
+        s.async = true;
+        s.onload = () => resolve(true);
+        s.onerror = () => resolve(false);
+        document.head.appendChild(s);
+    });
+    return window.__gmRazorpayLoading;
+}
+function gmActivatePremiumPlan(planId, paymentId) {
+    const plan = PREMIUM_PLANS[planId];
+    if (!plan || !userGhostID) return;
+    const expiry = Date.now() + plan.days * 24 * 60 * 60 * 1000;
+    safeStorage.set("gm_premium_" + userGhostID, "1");
+    safeStorage.set("gm_premium_plan_" + userGhostID, planId);
+    safeStorage.set("gm_premium_expiry_" + userGhostID, String(expiry));
+    if (plan.founder) safeStorage.set("gm_founder_" + userGhostID, "1");
+    if (paymentId) safeStorage.set("gm_last_payment_" + userGhostID, String(paymentId));
+    renderCreditsUI();
+    const label = document.getElementById("profile-premium-label");
+    if (label) label.innerText = "Premium active";
+    showToast(plan.label + " Premium activated — every perk is unlocked");
+}
 function buyPremiumPlan(planId) {
     if (!userGhostID) { showToast("Create your Ghost ID first"); return; }
     const plan = PREMIUM_PLANS[planId];
     if (!plan) return;
-    gmConfirm(
-        `${plan.label} — ${plan.price}. Premium is free during launch, so nothing is charged on this device. These prices apply once Google Play billing goes live.`,
-        () => {
-            const expiry = Date.now() + plan.days * 24 * 60 * 60 * 1000;
-            safeStorage.set("gm_premium_" + userGhostID, "1");
-            safeStorage.set("gm_premium_plan_" + userGhostID, planId);
-            safeStorage.set("gm_premium_expiry_" + userGhostID, String(expiry));
-            showToast(`${plan.label} Premium activated — every perk is unlocked`);
-            renderCreditsUI();
-        },
-        { title: "Activate Premium", confirmLabel: "Activate" }
-    );
+    const key = gmRazorpayKey();
+    if (!key) {
+        gmConfirm(
+            `${plan.label} — ${plan.price}. Payments are not connected in this build yet, so this plan activates free on this device. Add a Razorpay publishable key when you are ready to charge.`,
+            () => { gmActivatePremiumPlan(planId, ""); closePremiumModal(); },
+            { title: "Activate Premium", confirmLabel: "Activate free" }
+        );
+        return;
+    }
+    gmLoadRazorpay().then(ok => {
+        if (!ok || typeof window.Razorpay !== "function") {
+            showToast("Could not open Razorpay checkout — check the connection and try again");
+            return;
+        }
+        const checkout = new window.Razorpay({
+            key: key,
+            amount: plan.amountPaise,
+            currency: "INR",
+            name: "Ghost Mesh",
+            description: plan.label + " Premium — " + plan.price,
+            prefill: { name: userDisplayName || "" },
+            notes: { ghostId: userGhostID, plan: planId },
+            theme: { color: "#9b59f7" },
+            handler: response => {
+                // Client-side activation only. Verify the payment signature on a
+                // server (or a Razorpay webhook) before treating this as paid.
+                gmActivatePremiumPlan(planId, response && response.razorpay_payment_id);
+                closePremiumModal();
+            }
+        });
+        checkout.on("payment.failed", () => showToast("Payment failed — nothing was charged"));
+        checkout.open();
+    });
 }
 
 // ===== GHOST RADAR (Wi-Fi-settings-style) UI =====
