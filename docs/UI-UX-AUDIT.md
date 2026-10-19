@@ -5,7 +5,7 @@ Audit date: 2026-10-02 · Scope: the web app (`index.html`, `style.css`, `script
 
 **Method.** Every claim below was checked against the code, not the screenshots.
 Findings that could be checked automatically are now part of the project's own
-suites — `npm run verify` (11 static checks + 93 jsdom runtime checks) — so they
+suites — `npm run verify` (20 static checks + 305 jsdom runtime checks) — so they
 cannot silently regress. Items marked *[fixed]* were changed in this pass; the
 rest are listed with the reason they are still open.
 
@@ -36,6 +36,15 @@ rest are listed with the reason they are still open.
 | Profile photo | a picked photo was saved as-is, so tall pictures were cropped blind by CSS and the face could land outside the circle | a drag-and-zoom adjuster (`#dp-crop-modal`, pinch or slider) previews the exact circle and saves a 512 px square JPEG |
 | Daily bonus | one tap paid 5 credits, which made the credit economy nearly free | `BONUS_AMOUNT = 2`; the bigger earn is the sponsor break, which is a real view with a daily cap |
 | Nav destinations | pill nav was Chats / WiFi / Profile / Settings, and the reachable-ghosts list sat inside the WiFi panel | pill nav is **Chats / WiFi / Bluetooth / Map**: Profile lives in Settings, Settings itself moved into the header 3-dot menu (it only ever opened a sheet), and its old slot is the full-screen map. **Bluetooth** replaced Online as a real transport panel (BLE-discovered phones only), while the every-transport list (`#online-screen`) opens from the header menu's "Nearby Ghosts" |
+| Incoming call | the answer buttons were a thin strip pinned to the bottom of the call screen — easy to miss, and nothing else on screen said who was calling | the whole screen rings, dialer style: app name, caller name, "Incoming video/voice call", the caller's avatar and two labelled answers (Accept / Decline). `#incoming-call-overlay` is a real layer (`inset: 0`) and a static check fails if it collapses back to a strip |
+| Call buttons | six identical circles in one row (mute, video, switch camera, battery saver, end, speaker) — "bahut sare button aate hai" | the row is the short dialer set **Mute · Camera · End(red, centre) · Speaker · More**, each with a label; switch camera and the battery saver moved into the `⋮` More sheet |
+| Answering without a camera | if the receiver's video capture failed (camera refused, busy, single-camera device), `acceptIncomingCall()` logged it and **rejected the call** — the caller just never connected | video is tried first, then the app answers **audio-only** and says so ("Camera unavailable — answering with voice only"), so the call is still received. Only a missing mic rejects it, and then the caller is told |
+| Placing a video call | a refused camera ended the attempt with a toast | the app asks once ("Call with voice only instead?") and places the voice call on confirm |
+| Unanswered calls | the caller's screen rang forever — there was no "no answer" state | a 45 s timeout (receiver's `showIncomingCallUI` already had one) ends the attempt with "No answer — the call was not picked up" |
+| Empty-state buttons | `.cancel-btn { flex: 1 }` inside the empty state's column flex box stretched "Scan a friend's QR" into a tall block (the giant button in the screenshots) | the two actions sit in `.empty-actions` with `flex: 0 0 auto`, compact padding and auto width; a static check pins the rule |
+| Account privacy | any Ghost ID that knew yours could open a chat — there was no "request" gate to switch off either way | Settings → **Account Privacy** (device-local, `gm_privacy`): **Private** is the default — a new person sends a request the user accepts before any chat opens or a call can ring; **Public** (opt-in, reversible) approves the connection straight away. Blocked Ghosts are still rejected before the gate, and the QR/Wi-Fi handshake is unchanged because pairing in person is already consent |
+| Map chrome vanishing | the screen carried a permanent `transform` (screen animations used `animation-fill-mode: both`) and the top bar/bottom card were absolutely positioned **over** the map, so panning, a stray tap or an Android repaint could leave them painted away — the owner reported "after a while, or tapping the middle, the top and bottom disappear" | `#map-screen` is a fixed full-screen flex column with three flow children (slim bar → map `flex: 1` → compact bar); nothing overlays the map, the long privacy note moved behind a ⓘ toggle, and the animations no longer leave a transform behind. A resize/rotation listener re-measures Leaflet |
+| Where Wi-Fi peers live | the WiFi panel lists Wi-Fi Direct devices only, which left people asking why the person they message over the internet is not on the WiFi tab | unchanged by design — each radio keeps its own list and **Chats is the all-transport list** (WebRTC + Wi-Fi Direct + Bluetooth). The WiFi panel now says so in one line (`#wifi-others-caption`) instead of leaving it to be discovered |
 
 Files touched: `index.html`, `style.css`, `script.js`,
 `scripts/verify-static.mjs`, `scripts/run-runtime-checks.mjs`.
@@ -66,8 +75,11 @@ BLE-discovered phones, so each radio has its own list and the Chats tab still sh
 every peer regardless of transport; the every-transport list (`#online-screen`)
 opens from the header menu's "Nearby Ghosts".
 
-**Buttons / tap targets** — icon buttons are 44×44, call controls 54×54, scanner
-buttons 48×48, chat rows ≥72 px. Comfortably above the 24 px accessibility floor.
+**Buttons / tap targets** — icon buttons are 44×44, call controls 54×54 (the red End
+button 64×64), answer buttons 68×68, scanner buttons 48×48, chat rows ≥72 px.
+Comfortably above the 24 px accessibility floor. The in-call row carries five
+labelled controls instead of six unlabelled circles, and the empty-state actions
+size to their text instead of stretching to fill the column.
 
 **Typography / spacing / icons / colour** — one variable-driven dark surface system,
 accent-purple family, 4/8/12-step spacing. Emoji survive only where they are content
@@ -90,8 +102,9 @@ visible `aria-current`-style marker for the active bottom-nav tab (§8 P2).
 
 **Error states** — strong: ~45 distinct toast messages cover permission denials
 (camera/mic), invalid QR, bad pasted codes, no internet vs offline-ok, credit limits,
-call failures, plus a global crash guard (`safeToastOnce`). No error leaves the user
-without a message.
+call failures ("No answer", "Mic unavailable — call rejected", "Camera unavailable —
+answering with voice only"), plus a global crash guard (`safeToastOnce`). No error
+leaves the user without a message.
 
 **Empty states** — no chats, no reachable peers, no Bluetooth/Wi-Fi-Direct phones, no search results, no phrase-setup
 skip. Consistent shape and copy.
@@ -121,9 +134,12 @@ Dead ends / friction found:
 1. **QR camera scanning still does not complete** on at least one device pair
    (reported; the loop now has autofocus, crop+full-frame passes, inversion and stats
    — needs an on-device diagnostic run, see §7).
-2. **Incoming-call error** was reported without a stack trace; the call screen has
-   guards ("That call already ended", "Peer connection not found") but the original
-   error is unreproduced.
+2. **Incoming-call error** was reported without a stack trace. The three paths that
+   could swallow a received call are now handled explicitly: a refused camera
+   answers audio-only instead of rejecting, an online call without the signalling
+   socket says so instead of throwing inside a promise, and the caller gets a "No
+   answer" timeout. The WebView still has to be *open* to ring — a backgrounded app
+   cannot receive a call, because the ringing happens in the page (§7.2).
 3. ~~The WiFi tab carries three parallel ideas (reachable list, offline QR flow,
    radar map)~~ — the reach list now has its own Online screen, so the WiFi panel
    carries pairing only. Still worth collapsing the offline QR flow behind the two
@@ -189,8 +205,13 @@ Dead ends / friction found:
    `gmScanStats` in `chrome://inspect` — `frames: 0` ⇒ the WebView is not painting
    camera frames (permission/`playsinline`/GPU), `frames > 0, cropHits+fullHits: 0`
    ⇒ jsQR is running but not finding the code (resolution/glare/QR density).
-2. **Incoming-call error (P1, unreproduced).** Needs the console output from the
-   receiving device; `chrome://inspect` shows everything (tag `GhostMeshWeb`).
+2. **Incoming call while the app is not in the foreground (P1, by design).** The ring
+   lives in the page, so a WebView that Android has paused (app closed, or swiped
+   away) cannot show it — the caller sees the new "No answer" timeout. Receiving in
+   the background needs the native shell to take over (a data-channel event reaching
+   Java, then a full-screen-intent notification); until then, both phones keep the
+   app open. When the app *is* open, `chrome://inspect` (tag `GhostMeshWeb`) shows
+   every call log line.
 3. WebRTC and camera behaviour cannot be verified from this workspace — it needs two
    real Android devices (or one device + one desktop). Everything else in this report
    was verified by the automated suites.
@@ -199,7 +220,8 @@ Dead ends / friction found:
 
 ## 8. G. Suggested priorities
 
-**P0** — on-device QR diagnostic (§7.1); capture the incoming-call error (§7.2).
+**P0** — on-device QR diagnostic (§7.1); decide on the native background-call
+notification for §7.2 (it is the only way an incoming call can reach a closed app).
 
 **P1** — re-word or implement the security claims (§5); encrypt localStorage with a
 seed-derived key; modal focus trapping (move focus in on open, restore on close);
@@ -214,7 +236,7 @@ tablet/desktop layout beyond the single 600 px breakpoint.
 ## 9. How to verify this pass
 
 ```bash
-npm run verify      # 13 static checks + 106 runtime (jsdom) checks, all passing
+npm run verify      # 20 static checks + 305 runtime (jsdom) checks, all passing
 ```
 
 The new checks cover: accessible names on icon-only buttons, the toast live region,

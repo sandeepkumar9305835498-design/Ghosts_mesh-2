@@ -131,10 +131,10 @@ ok("formatBonusWait formats hours+minutes", window.formatBonusWait(90 * 60 * 100
 window.openSettingsSheet();
 ok("settings sheet opens", hidden("settings-sheet") === false);
 const settingsRows = doc.querySelectorAll("#settings-sheet .settings-row");
-ok("settings lists all eleven options", settingsRows.length === 11, String(settingsRows.length));
+ok("settings lists all twelve options", settingsRows.length === 12, String(settingsRows.length));
 const settingsText = $("settings-sheet").textContent;
 for (const label of ["My Profile", "Ghost Assistant (Recover ID)", "Chat Themes", "App Lock", "Clear All Chats",
-    "Blocked Ghosts", "Privacy Policy", "Send Feedback", "Claim Daily Bonus", "Refer a Ghost", "Logout"]) {
+    "Blocked Ghosts", "Account Privacy", "Privacy Policy", "Send Feedback", "Claim Daily Bonus", "Refer a Ghost", "Logout"]) {
     ok(`settings has "${label}"`, settingsText.includes(label));
 }
 ok("no settings row says coming soon", !/coming soon/i.test(settingsText), settingsText);
@@ -595,6 +595,146 @@ ok("battery saver turns on", $("call-battery-btn").classList.contains("battery-o
 window.toggleLowBatteryMode();
 ok("battery saver turns off", $("call-battery-btn").classList.contains("battery-on") === false);
 
+// ---------------------------------------------- call screen: dialer controls
+// Six identical circles in one row was the "bahut sare button" complaint, so the
+// row is the same short set a phone dialer shows and the extras moved behind ⋮.
+{
+    const ctrlRow = doc.querySelector(".call-bottom-controls");
+    // Static markup reads through textContent in jsdom (no layout → no innerText).
+    const labels = [...ctrlRow.querySelectorAll(".call-ctrl-label")].map(el => el.textContent.trim());
+    ok("the call row is the short dialer set: Mute / Camera / End / Speaker / More",
+        labels.join(",") === "Mute,Camera,End,Speaker,More", labels.join(","));
+    ok("switch camera and the battery saver moved out of the row into More",
+        !!$("call-camera-switch-btn") && !!$("call-battery-btn") &&
+        !!$("call-camera-switch-btn").closest("#call-more-sheet") &&
+        !!$("call-battery-btn").closest("#call-more-sheet") &&
+        ctrlRow.querySelector("#call-camera-switch-btn") === null);
+    window.gmToggleCallMore();
+    ok("More opens the extra call options",
+        hidden("call-more-sheet") === false && $("call-more-btn").getAttribute("aria-expanded") === "true");
+    window.gmToggleCallMore(false);
+    ok("More closes again",
+        hidden("call-more-sheet") === true && $("call-more-btn").getAttribute("aria-expanded") === "false");
+}
+
+// ------------------------------------------- incoming call is a real ring screen
+{
+    window.initChatData("Ghost-RING1");
+    // A callee whose camera is refused: exactly the case that used to answer
+    // "Mic/Camera unavailable — call rejected" and drop the call.
+    const mediaRequests = [];
+    Object.defineProperty(window.navigator, "mediaDevices", {
+        configurable: true,
+        value: {
+            getUserMedia: async constraints => {
+                mediaRequests.push(JSON.stringify(constraints));
+                if (constraints && constraints.video) {
+                    const err = new Error("camera refused");
+                    err.name = "NotAllowedError";
+                    throw err;
+                }
+                return { getTracks: () => [], getVideoTracks: () => [], getAudioTracks: () => [] };
+            }
+        }
+    });
+
+    let answeredWith = null;
+    const call = {
+        peer: "Ghost-RING1", open: true, metadata: { type: "video" },
+        on() {}, close() {}, answer(stream) { answeredWith = stream; }
+    };
+    window.handleIncomingCall(call);
+    ok("an incoming call takes over the whole screen",
+        hidden("call-screen") === false && hidden("incoming-call-overlay") === false);
+    ok("the ring screen names the caller", $("incoming-peer-name").innerText === "Ghost-RING1", $("incoming-peer-name").innerText);
+    ok("the ring screen says what kind of call it is",
+        /Incoming video call/.test($("incoming-call-kind").innerText), $("incoming-call-kind").innerText);
+    ok("the ring screen offers exactly Accept and Decline, with labels",
+        doc.querySelectorAll(".incoming-actions .incoming-btn").length === 2 &&
+        !!doc.querySelector(".incoming-accept") && !!doc.querySelector(".incoming-reject") &&
+        doc.querySelectorAll(".incoming-action-label").length === 2);
+
+    window.acceptIncomingCall();
+    await new Promise(r => setTimeout(r, 40));
+    ok("answering a video call still connects when the camera is refused",
+        answeredWith !== null && hidden("call-screen") === false, JSON.stringify(mediaRequests));
+    ok("the answer tried video first and then fell back to audio only",
+        mediaRequests.length === 2 && /"video":true/.test(mediaRequests[0]) && !/"video"/.test(mediaRequests[1]),
+        JSON.stringify(mediaRequests));
+    ok("a voice-only answer hides the camera controls and says why",
+        hidden("call-video-toggle-btn") === true && /voice only/i.test(toastText()), toastText());
+    window.endCurrentCall();
+    await new Promise(r => setTimeout(r, 20));
+    ok("ending the call closes the call screen", hidden("call-screen") === true);
+}
+
+// --------------------------------------------- screen stays awake during calls
+{
+    ok("the call screen can hold a screen wake lock", typeof window.gmSetCallWakeLock === "function");
+    let requested = 0, released = 0;
+    Object.defineProperty(window.navigator, "wakeLock", {
+        configurable: true,
+        value: { request: async () => { requested++; return { release: async () => { released++; } }; } }
+    });
+    await window.gmSetCallWakeLock(true);
+    ok("a call asks the platform for a screen wake lock", requested === 1, String(requested));
+    await window.gmSetCallWakeLock(true);
+    ok("asking again does not stack a second lock", requested === 1, String(requested));
+    window.endCallFlow();
+    await new Promise(r => setTimeout(r, 10));
+    ok("ending the call releases the wake lock", released === 1, String(released));
+    Object.defineProperty(window.navigator, "wakeLock", { configurable: true, value: undefined });
+    await window.gmSetCallWakeLock(true);
+    ok("a platform without the API is skipped quietly", true);
+}
+
+// ------------------------------------------ a call nobody answers times out
+{
+    window.initChatData("Ghost-RING3");
+    window.GM_CALL_TIMEOUT_MS = 120;
+    window.openCallUI("Ghost-RING3", "video", "Video Calling...");
+    ok("the outgoing call screen is up before it is answered", hidden("call-screen") === false);
+    await new Promise(r => setTimeout(r, 260));
+    ok("an unanswered call ends itself instead of ringing forever",
+        hidden("call-screen") === true && /No answer/.test(toastText()), toastText());
+    delete window.GM_CALL_TIMEOUT_MS;
+}
+
+// --------------------------- placing a video call when the camera is refused
+{
+    window.initChatData("Ghost-RING2");
+    window.gmPlaceOnlineCall("Ghost-RING2", "video");
+    await new Promise(r => setTimeout(r, 40));
+    ok("placing a video call without a camera asks before dropping to voice",
+        hidden("gm-confirm") === false && $("gm-confirm-title").innerText === "Camera unavailable" &&
+        /voice only/i.test($("gm-confirm-msg").innerText), $("gm-confirm-msg").innerText);
+    let retried = null;
+    const realInitiate = window.initiateP2PCall;
+    window.initiateP2PCall = type => { retried = type; };
+    window.gmConfirmResolve(true);
+    ok("confirming the fallback re-runs the call as a voice call", retried === "voice", String(retried));
+    window.initiateP2PCall = realInitiate;
+    // Back to the no-camera-at-all state the rest of the suite boots with.
+    Object.defineProperty(window.navigator, "mediaDevices", { value: undefined, configurable: true });
+}
+
+// ---------------------------------- answering with no camera/mic at all
+// file:// and older WebViews have no getUserMedia. The ring screen used to stay
+// up forever on that path, so the caller rang on with no answer and the callee
+// was stuck looking at a call they could not join.
+{
+    window.initChatData("Ghost-RING4");
+    let closed = false;
+    const call = { peer: "Ghost-RING4", open: true, metadata: { type: "video" }, on() {}, close() { closed = true; }, answer() {} };
+    window.handleIncomingCall(call);
+    ok("the ring screen is up before answering", hidden("incoming-call-overlay") === false);
+    window.acceptIncomingCall();
+    await new Promise(r => setTimeout(r, 40));
+    ok("answering with no camera/mic ends the call instead of hanging on the ring screen",
+        hidden("call-screen") === true && closed === true, "closed=" + closed);
+    ok("the ring screen is gone after a refused answer", hidden("incoming-call-overlay") === true);
+}
+
 // ------------------------------------------------------- self-destruct wipes
 {
     window.initChatData("Ghost-DES01");
@@ -719,6 +859,23 @@ ok("the right PIN unlocks the idle-locked app",
     ok("the map reads no location until asked",
         $("map-my-coords").textContent === "—" && $("map-status-line").innerText.trim() !== "",
         $("map-my-coords").textContent);
+    // The chrome used to be absolutely positioned over the map with a lingering
+    // transform on the screen; it could be panned/painted away. It is a flow
+    // layout now, and the long note is opt-in behind ⓘ so the map stays whole.
+    ok("the map bar and the map itself are separate blocks (no overlay on the map)",
+        $("live-radar-map").closest(".live-map-wrap") !== null &&
+        !$("live-radar-map").closest(".live-map-wrap").contains(doc.querySelector(".live-map-top")) &&
+        !$("live-radar-map").closest(".live-map-wrap").contains(doc.querySelector(".live-map-panel")));
+    ok("the long privacy note is hidden until asked for", hidden("map-info-note") === true);
+    window.gmToggleMapInfo();
+    ok("the ⓘ button reveals the note",
+        hidden("map-info-note") === false && $("map-info-btn").getAttribute("aria-expanded") === "true");
+    window.gmToggleMapInfo(false);
+    ok("the note hides again", hidden("map-info-note") === true);
+    ok("the map stats and actions stay visible (nothing auto-hides)",
+        !doc.querySelector(".live-map-panel").classList.contains("hidden") &&
+        doc.querySelectorAll(".live-map-stats .live-map-row").length === 2 &&
+        doc.querySelectorAll(".live-map-actions .credits-earn-btn").length === 2);
     window.closeLiveMap();
     ok("closing the map returns to the chats",
         hidden("chatlist-screen") === false && hidden("map-screen") === true);
@@ -817,6 +974,50 @@ ok("the right PIN unlocks the idle-locked app",
     window.gmDpCropCancel();
     ok("cancelling the adjuster keeps the old photo and closes",
         hidden("dp-crop-modal") === true && /data:image/.test($("profile-avatar-big").innerHTML));
+}
+
+// ------------------------------------------------- account privacy (requests)
+// Private is the default: a stranger with your Ghost ID sends a request you
+// accept. Public opens the chat straight away. Either way a blocked Ghost is
+// rejected before this gate. This block runs last on purpose: accepting a
+// connection adds a peer to the reach lists, so the list checks above must have
+// already run.
+{
+    ok("the privacy row says Private out of the box", $("privacy-mode-state").innerText === "Private", $("privacy-mode-state").innerText);
+    window.openPrivacyModeSheet();
+    ok("the privacy chooser opens with both modes",
+        hidden("privacy-mode-sheet") === false && !!$("privacy-opt-private") && !!$("privacy-opt-public"));
+    ok("the current mode is highlighted", $("privacy-opt-private").classList.contains("selected"));
+
+    // Private: the request dialog appears and nothing is auto-approved.
+    const sent = [];
+    const fakeConn = peer => ({ peer, open: true, send(m) { sent.push({ peer, m }); }, close() {} });
+    window.handleIncomingRequest(fakeConn("Ghost-REQ1"));
+    ok("a private account asks before connecting",
+        hidden("request-modal") === false && /Ghost-REQ1 wants to connect/.test($("request-modal-text").innerText),
+        $("request-modal-text").innerText);
+    ok("a private account sends no approval until Accept", sent.length === 0, JSON.stringify(sent));
+    window.rejectConnectionRequest();
+    ok("declining closes the request dialog", hidden("request-modal") === true);
+
+    // Public: same request, no dialog, approved immediately.
+    window.gmPickPrivacyMode("public");
+    ok("switching to public updates the settings row", $("privacy-mode-state").innerText === "Public", $("privacy-mode-state").innerText);
+    window.handleIncomingRequest(fakeConn("Ghost-REQ2"));
+    ok("a public account opens the chat without asking", hidden("request-modal") === true);
+    ok("a public account approves the connection right away",
+        sent.some(s => s.peer === "Ghost-REQ2" && s.m.type === "handshake-status" && s.m.approved === true),
+        JSON.stringify(sent));
+    window.gmPickPrivacyMode("private");
+    ok("switching back to private is possible at any time", $("privacy-mode-state").innerText === "Private");
+    window.closePrivacyModeSheet();
+    ok("the privacy chooser closes", hidden("privacy-mode-sheet") === true);
+    // Accept must still work when the button calls it with no argument at all.
+    window.handleIncomingRequest(fakeConn("Ghost-REQ3"));
+    window.acceptConnectionRequest();
+    ok("the Accept button still approves the connection",
+        sent.some(s => s.peer === "Ghost-REQ3" && s.m.approved === true), JSON.stringify(sent));
+    ok("accepting closes the request dialog", hidden("request-modal") === true);
 }
 
 // ---------------------------------------------- nothing logged an error
