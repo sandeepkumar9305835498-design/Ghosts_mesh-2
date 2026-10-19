@@ -410,6 +410,109 @@ if (!/gmPeersByTransport\("ble"\)/.test(scriptSource) || !/gmPeersByTransport\("
 if (!/id="map-screen"[^>]*class="app-screen/.test(html)) extrasProblems.push("the map is not an app screen");
 check("Bluetooth tab, live map, editable profile and sponsor surface are wired", extrasProblems);
 
+// ------------------------------------------- 14. call screen (dialer-shaped UI)
+// Calls are the one flow a phone user compares against their dialer, so the
+// shape is pinned: a full-screen ringing layer with two answers, a short
+// control row, and the extras behind More.
+const callProblems = [];
+for (const fn of ["gmToggleCallMore", "gmPlaceOnlineCall", "showIncomingCallUI", "acceptIncomingCall",
+    "rejectIncomingCall", "endCurrentCall", "gmSetCallWakeLock", "gmStartCallTimeout",
+    "gmClearCallTimeout"]) {
+    if (!defined.has(fn)) callProblems.push(fn + "() is missing");
+}
+for (const id of ["incoming-call-overlay", "incoming-peer-name", "incoming-call-kind", "incoming-avatar",
+    "call-more-sheet", "call-more-btn"]) {
+    if (!htmlIds.has(id)) callProblems.push("missing #" + id);
+}
+const ringHtml = (html.match(/<div id="incoming-call-overlay"[\s\S]*?<!-- Bottom controls/) || [""])[0];
+if (!ringHtml) callProblems.push("could not locate the incoming-call overlay");
+if (htmlIds.has("incoming-call-overlay")) {
+    const ring = (html.match(/<div id="incoming-call-overlay"[\s\S]*?<\/div>\s*<\/div>\s*<\/div>/) || [""])[0];
+    if ((ring.match(/class="incoming-btn /g) || []).length !== 2) {
+        callProblems.push("the ring screen must offer exactly two answer buttons");
+    }
+}
+// The control row is the short dialer set, and the two busy controls that used
+// to sit in it live inside the More sheet now.
+const ctrlBlock = (html.match(/<div class="call-bottom-controls">([\s\S]*?)\n    <\/div>\n\n    <!-- "More"/) || [null, ""])[1];
+if (!ctrlBlock) callProblems.push("could not locate the call control row");
+else {
+    const ctrlLabels = [...ctrlBlock.matchAll(/<span class="call-ctrl-label">([^<]+)<\/span>/g)].map(m => m[1].trim());
+    if (ctrlLabels.join(",") !== "Mute,Camera,End,Speaker,More") {
+        callProblems.push("call row is not Mute/Camera/End/Speaker/More (" + ctrlLabels.join(",") + ")");
+    }
+    for (const id of ["call-camera-switch-btn", "call-battery-btn"]) {
+        if (ctrlBlock.includes('id="' + id + '"')) callProblems.push(id + " is back in the crowded control row");
+    }
+}
+const moreStart = html.indexOf('id="call-more-sheet"');
+const moreEnd = html.indexOf("<!-- TOAST -->", moreStart);
+const moreSheet = moreStart >= 0 && moreEnd > moreStart ? html.slice(moreStart, moreEnd) : "";
+if (!moreSheet) callProblems.push("could not locate the More sheet");
+for (const id of ["call-camera-switch-btn", "call-battery-btn"]) {
+    if (!moreSheet.includes('id="' + id + '"')) callProblems.push(id + " is not inside the More sheet");
+}
+// The ringing layer has to be a real layer (inset 0), not the old bottom strip.
+const ringCss = (css.match(/\.incoming-call-overlay\s*\{[^}]*\}/) || [""])[0];
+if (!/inset:\s*0/.test(ringCss.replace(/\n/g, " "))) {
+    callProblems.push(".incoming-call-overlay is not a full-screen layer any more");
+}
+// A refused camera asks once about a voice call instead of dropping the call.
+if (!/voice only/i.test(scriptSource)) callProblems.push("no voice-only fallback for a refused camera");
+check("call screen is dialer-shaped and survives a refused camera", callProblems);
+
+// ---------------------------------- 15. buttons keep their own size in columns
+// `.cancel-btn { flex: 1 }` inside `.empty-state`'s column flex box stretched
+// "Scan a friend's QR" into a tall block — the giant button in the screenshots.
+const sizingProblems = [];
+const emptyCss = (css.match(/\.empty-state\s+\.empty-btn\s*\{[^}]*\}/) || [""])[0];
+if (!/flex:\s*0\s+0\s+auto/.test(emptyCss.replace(/\n/g, " "))) {
+    sizingProblems.push(".empty-state .empty-btn must pin flex: 0 0 auto so it cannot stretch");
+}
+const emptyBlock = (html.match(/<div class="empty-state"[\s\S]*?<\/div>\s*<!-- Shown by filterChats/) || [""])[0];
+if (!emptyBlock) sizingProblems.push("could not locate the Chats empty state");
+if (!/class="empty-actions"/.test(emptyBlock)) sizingProblems.push("the empty-state actions are not grouped in .empty-actions");
+if (!/class="primary-btn empty-btn"/.test(emptyBlock) || !/class="cancel-btn empty-btn"/.test(emptyBlock)) {
+    sizingProblems.push("the empty-state buttons are not using .empty-btn");
+}
+if (/style="width:\s*auto/.test(emptyBlock)) sizingProblems.push("the empty-state buttons still need inline width hacks");
+check("empty-state buttons keep their own size", sizingProblems);
+
+// --------------------------- 16. account privacy, map layout, transport split
+const privacyProblems = [];
+for (const fn of ["gmPrivacyMode", "gmPickPrivacyMode", "gmSyncPrivacyRow", "openPrivacyModeSheet",
+    "closePrivacyModeSheet", "gmToggleMapInfo", "gmMapHandleResize"]) {
+    if (!defined.has(fn)) privacyProblems.push(fn + "() is missing");
+}
+for (const id of ["privacy-mode-sheet", "privacy-opt-private", "privacy-opt-public", "privacy-mode-state",
+    "map-info-btn", "map-info-note", "wifi-others-caption"]) {
+    if (!htmlIds.has(id)) privacyProblems.push("missing #" + id);
+}
+// Private has to be the default AND the gate has to sit in front of the accept
+// path — a public account is the only one that may skip the request dialog.
+if (!/GM_PRIVACY_MODES\[saved\] \? saved : "private"/.test(scriptSource)) {
+    privacyProblems.push("the default account privacy is no longer private");
+}
+if (!/gmPrivacyMode\(\) === "public"/.test(scriptSource)) {
+    privacyProblems.push("the public mode is not wired into the incoming-request gate");
+}
+if (!/privacy-mode-state/.test(sheetHtml)) privacyProblems.push("the privacy row is not in the Settings sheet");
+// The map chrome must be flow layout, not overlays that can vanish, and no
+// screen animation may leave a transform behind (that was the repaint bug).
+const mapTopCss = (css.match(/\.live-map-top\s*\{[^}]*\}/) || [""])[0].replace(/\n/g, " ");
+const mapWrapCss = (css.match(/\.live-map-wrap\s*\{[^}]*\}/) || [""])[0].replace(/\n/g, " ");
+const mapPanelCss = (css.match(/\.live-map-panel\s*\{[^}]*\}/) || [""])[0].replace(/\n/g, " ");
+for (const [label, rule] of [[".live-map-top", mapTopCss], [".live-map-wrap", mapWrapCss], [".live-map-panel", mapPanelCss]]) {
+    if (/position:\s*absolute/.test(rule)) privacyProblems.push(label + " is an absolute overlay again");
+}
+if (!/flex:\s*1/.test(mapWrapCss)) privacyProblems.push("the map no longer takes the free space (flex: 1)");
+if (/\.gm-screen-(fade|push)[^{]*\{[^}]*\bboth\b/.test(css.replace(/\n/g, " "))) {
+    privacyProblems.push("a screen animation keeps animation-fill-mode: both (the lingering transform bug is back)");
+}
+// The WiFi panel keeps its own list and says where the other Wi-Fi peers are.
+if (!/reach-caption/.test(css)) privacyProblems.push("the WiFi panel caption style is missing");
+check("account privacy, map layout and the transport split are wired", privacyProblems);
+
 // ---------------------------------------------------------------- report
 const failed = results.filter(r => r.problems.length);
 for (const r of results) {

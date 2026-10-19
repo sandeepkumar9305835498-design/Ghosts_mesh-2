@@ -156,6 +156,32 @@ window.addEventListener("unhandledrejection", event => {
     event.preventDefault();
 });
 
+// ===== SCREEN WAKE LOCK (calls) =====
+// A phone that dims its screen mid-call (or while it is ringing) also throttles
+// the WebView, which is how a call gets missed. The Screen Wake Lock API holds
+// the display while the call screen is up; Android releases the lock by itself
+// when the app goes to the background, so it is re-requested when it comes back.
+// Platforms without the API (jsdom, older WebViews) simply skip it.
+let gmWakeLock = null;
+let gmCallUiOpen = false;
+function gmSetCallWakeLock(on) {
+    return Promise.resolve().then(async () => {
+        try {
+            gmCallUiOpen = !!on;
+            if (on) {
+                if (!navigator.wakeLock || typeof navigator.wakeLock.request !== "function") return false;
+                if (!gmWakeLock) gmWakeLock = await navigator.wakeLock.request("screen");
+                return true;
+            }
+            if (gmWakeLock) { await gmWakeLock.release(); gmWakeLock = null; }
+        } catch (e) {
+            // A refused lock must never break the call itself.
+            gmWakeLock = null;
+        }
+        return false;
+    });
+}
+
 // ===== MEDIA CAPTURE (safe wrapper) =====
 // navigator.mediaDevices does not exist outside a secure context (file://,
 // and some Android WebView wrappers). Touching it directly throws a
@@ -2128,15 +2154,60 @@ function connectToPeer(targetID) {
     setupConn(conn);
 }
 
+// ===== ACCOUNT PRIVACY (who may open a chat) =====
+// The Ghost ID already has to be known for anyone to reach you — there is no
+// directory. This only decides what happens next: `private` (the default) shows
+// the request dialog and waits for an accept, `public` opens the chat straight
+// away. Blocked Ghosts are rejected before either path, the QR / Wi-Fi handshake
+// stays consent-by-pairing, and nothing is published either way.
+const GM_PRIVACY_KEY = "gm_privacy";
+const GM_PRIVACY_MODES = { private: "Private", public: "Public" };
+function gmPrivacyMode() {
+    const saved = safeStorage.get(GM_PRIVACY_KEY);
+    return GM_PRIVACY_MODES[saved] ? saved : "private";
+}
+function gmSyncPrivacyRow() {
+    const el = document.getElementById("privacy-mode-state");
+    if (el) el.innerText = GM_PRIVACY_MODES[gmPrivacyMode()];
+    for (const mode of ["private", "public"]) {
+        const opt = document.getElementById("privacy-opt-" + mode);
+        if (opt) opt.classList.toggle("selected", gmPrivacyMode() === mode);
+    }
+}
+function openPrivacyModeSheet() {
+    gmSyncPrivacyRow();
+    showEl("privacy-mode-sheet");
+}
+function closePrivacyModeSheet() { hideEl("privacy-mode-sheet"); }
+function gmPickPrivacyMode(mode) {
+    if (!GM_PRIVACY_MODES[mode]) return;
+    safeStorage.set(GM_PRIVACY_KEY, mode);
+    gmSyncPrivacyRow();
+    showToast(mode === "public"
+        ? "Public — anyone with your Ghost ID can message you"
+        : "Private — new people must send a request first");
+}
+
 // ===== ACCEPT/REJECT =====
 function handleIncomingRequest(conn) {
     if (notificationsEnabled === false) return;
+    // Public mode: no ask, the chat just opens. The caller still gets the same
+    // handshake message the Accept button sends, so both sides behave identically.
+    if (gmPrivacyMode() === "public") {
+        pendingIncomingConnection = conn;
+        acceptConnectionRequest(true);
+        return;
+    }
     pendingIncomingConnection = conn;
     document.getElementById("request-modal-text").innerText = conn.peer + " wants to connect with you.";
     showEl("request-modal");
 }
 
-function acceptConnectionRequest() {
+// `auto` is only ever passed as `true` by the public-mode path above. The Accept
+// button calls this with no argument at all, so a click event can never arrive
+// here and be mistaken for "auto".
+function acceptConnectionRequest(auto) {
+    const wasAuto = auto === true;
     hideEl("request-modal");
     if (!pendingIncomingConnection) return;
     if (!activeConnections.some(c => c.peer === pendingIncomingConnection.peer)) activeConnections.push(pendingIncomingConnection);
@@ -2144,7 +2215,10 @@ function acceptConnectionRequest() {
     pendingIncomingConnection.send({ type: "handshake-status", approved: true, sender: userGhostID, displayName: userDisplayName });
     addSystemMsg(pendingIncomingConnection.peer, "Connected with " + pendingIncomingConnection.peer);
     updateOnlineUsers(pendingIncomingConnection.peer, pendingIncomingConnection.peer, true);
-    renderChatList(); showToast("Accepted " + pendingIncomingConnection.peer);
+    renderChatList();
+    showToast(wasAuto
+        ? (pendingIncomingConnection.peer + " connected — public mode is on")
+        : ("Accepted " + pendingIncomingConnection.peer));
     pendingIncomingConnection = null;
 }
 
@@ -3822,10 +3896,13 @@ function stopRingtone() { try { ringtoneCtx?.close(); } catch(e){} ringtoneCtx =
 function openCallUI(peerId, type, statusText) {
     showEl("call-screen");
     hideEl("incoming-call-overlay");
+    gmToggleCallMore(false);
+    gmSetCallWakeLock(true);
     const isVideo = type === 'video';
     document.getElementById("call-peer-label").innerText = chatData[peerId]?.displayName || peerId;
     document.getElementById("call-status-label").innerText = statusText;
     document.getElementById("call-timer").classList.add("hidden");
+    gmStartCallTimeout();
     document.getElementById("call-video-toggle-btn").classList.toggle("hidden", !isVideo);
     document.getElementById("call-camera-switch-btn").classList.toggle("hidden", !isVideo);
     document.getElementById("call-video-toggle-btn").classList.remove("video-off");
@@ -3841,6 +3918,19 @@ function openCallUI(peerId, type, statusText) {
 // the UI can time out and clean up even if the caller vanishes.
 let pendingIncomingCallInfo = null;
 let incomingCallTimeout = null;
+
+// The "More" sheet behind the ⋮ button on the call screen. Camera switching and
+// the battery saver used to be two of six identical circles in the control row,
+// which is where the "too many buttons" complaint came from.
+let gmCallMoreOpen = false;
+function gmToggleCallMore(force) {
+    const sheet = document.getElementById("call-more-sheet");
+    const btn = document.getElementById("call-more-btn");
+    if (!sheet) return;
+    gmCallMoreOpen = (typeof force === "boolean") ? force : !gmCallMoreOpen;
+    sheet.classList.toggle("hidden", !gmCallMoreOpen);
+    if (btn) btn.setAttribute("aria-expanded", gmCallMoreOpen ? "true" : "false");
+}
 
 function showIncomingCallUI(peerId, type) {
     pendingIncomingCallInfo = { peerId, type, startedAt: Date.now() };
@@ -3862,6 +3952,15 @@ function showIncomingCallUI(peerId, type) {
     document.getElementById("call-video-toggle-btn").classList.add("hidden");
     document.getElementById("call-camera-switch-btn").classList.add("hidden");
     setAvatarDisplay("call-peer-avatar-big", chatData[peerId]?.dp || null);
+    // The ringing screen is its own full-screen layer (dialer style), fed from
+    // the same chat data the rest of the app uses.
+    const ringName = document.getElementById("incoming-peer-name");
+    if (ringName) ringName.innerText = chatData[peerId]?.displayName || peerId;
+    const ringKind = document.getElementById("incoming-call-kind");
+    if (ringKind) ringKind.innerText = type === 'video' ? "Incoming video call" : "Incoming voice call";
+    setAvatarDisplay("incoming-avatar", chatData[peerId]?.dp || null);
+    gmToggleCallMore(false);
+    gmSetCallWakeLock(true);
     showEl("incoming-call-overlay");
     startRingtone();
     if (navigator.vibrate) navigator.vibrate([500,200,500]);
@@ -3870,6 +3969,28 @@ function showIncomingCallUI(peerId, type) {
 function updateCallStatusLabel(text) {
     const el = document.getElementById("call-status-label");
     if (el) el.innerText = text;
+}
+
+// A call that is never picked up used to ring on the caller's phone forever —
+// there was no "no answer" state at all. This closes it out the way a dialer
+// does. The receiver already had its own 45s timeout in showIncomingCallUI.
+let gmCallTimeoutId = null;
+function gmClearCallTimeout() {
+    if (gmCallTimeoutId) { clearTimeout(gmCallTimeoutId); gmCallTimeoutId = null; }
+}
+function gmStartCallTimeout() {
+    gmClearCallTimeout();
+    const override = Number(window.GM_CALL_TIMEOUT_MS);
+    const wait = override > 0 ? override : 45000;
+    gmCallTimeoutId = setTimeout(() => {
+        gmCallTimeoutId = null;
+        const timerEl = document.getElementById("call-timer");
+        // The call timer only runs once media is flowing, so a visible timer
+        // means the call connected while this was pending.
+        if (timerEl && !timerEl.classList.contains("hidden")) return;
+        showToast("No answer — the call was not picked up");
+        endCurrentCall();
+    }, wait);
 }
 
 // Toggles between full-screen remote video and the DP fallback avatar.
@@ -3889,6 +4010,21 @@ function initiateP2PCall(type) {
     const target = currentChatPeer || activeConnections[0].peer;
     if (offlinePeerConnections[target]) { startOfflineCall(target, type); return; }
 
+    // Online calling rides the signalling socket. Without it the old code threw
+    // inside a promise chain, which the app only surfaced as a generic
+    // "something went wrong" toast.
+    if (!myPeerInstance || typeof myPeerInstance.call !== "function") {
+        showToast("Online calling is not connected — pair over WiFi, or try again once the signal is up");
+        return;
+    }
+
+    gmPlaceOnlineCall(target, type);
+}
+
+// Places an online call with whatever media the phone will actually hand over.
+// A video call whose camera is refused or already busy used to end there; now
+// the person is asked once whether to continue with voice only.
+function gmPlaceOnlineCall(target, type) {
     gmGetUserMedia({ audio: true, video: type === 'video' }).then(stream => {
         localMediaStream = stream;
         openCallUI(target, type, type === 'video' ? "Video Calling..." : "Voice Calling...");
@@ -3896,7 +4032,16 @@ function initiateP2PCall(type) {
         activeP2PCallInstance = myPeerInstance.call(target, stream, { metadata: { type } });
         listenCallStream(activeP2PCallInstance, type);
         playRingtone('ring');
-    }).catch(e => { if (isInsecureMediaError(e)) return; showToast("Camera/Mic access denied"); });
+    }).catch(e => {
+        if (isInsecureMediaError(e)) return;   // gmGetUserMedia already said why
+        if (type === 'video') {
+            gmConfirm("Camera is unavailable or was denied, so video cannot start. Call with voice only instead?",
+                () => initiateP2PCall('voice'),
+                { title: "Camera unavailable", confirmLabel: "Voice call" });
+            return;
+        }
+        showToast("Mic access denied");
+    });
 }
 
 function listenCallStream(callObj, type) {
@@ -3959,8 +4104,26 @@ function handleIncomingCall(call) {
 async function startOfflineCall(peerId, type) {
     const pc = offlinePeerConnections[peerId];
     if (!pc) { showToast("Peer connection not found"); return; }
+
+    // Same camera fallback as the online path: a refused video camera asks
+    // whether to carry on with voice instead of killing the call silently.
+    let stream = null;
     try {
-        const stream = await gmGetUserMedia({ audio: true, video: type === 'video' });
+        stream = await gmGetUserMedia({ audio: true, video: type === 'video' });
+    } catch (mediaErr) {
+        if (isInsecureMediaError(mediaErr)) return;
+        if (type === 'video') {
+            gmConfirm("Camera is unavailable or was denied, so video cannot start. Call with voice only instead?",
+                () => startOfflineCall(peerId, 'voice'),
+                { title: "Camera unavailable", confirmLabel: "Voice call" });
+            return;
+        }
+        console.error("Mic access denied for the offline call:", mediaErr);
+        showToast("Mic access denied");
+        return;
+    }
+
+    try {
         localMediaStream = stream;
         stream.getTracks().forEach(t => pc.addTrack(t, stream));
         pc.ontrack = event => {
@@ -3977,8 +4140,9 @@ async function startOfflineCall(peerId, type) {
         activeOfflineCallPeer = peerId; activeOfflineCallType = type;
         playRingtone('ring');
     } catch(e) {
+        // Anything left here is the offer/ICE side, not permissions.
         console.error(e);
-        if (!isInsecureMediaError(e)) showToast("Camera/Mic access denied");
+        showToast("Could not start the call");
     }
 }
 
@@ -4011,14 +4175,31 @@ async function acceptIncomingCall() {
     const isOffline = !!call.offline;
     const type = isOffline ? call.callType : ((call.metadata && call.metadata.type) || 'voice');
 
-    let stream;
+    // A refused, busy or missing camera must not cost the person the whole call
+    // they just answered: fall back to audio and say so. Only when even the mic
+    // is unavailable does the call get rejected, and then the caller is told.
+    let stream = null;
+    let answeredVoiceOnly = false;
+    let alreadyExplained = false;   // gmGetUserMedia showed its own message
     try {
         stream = await gmGetUserMedia({ audio: true, video: type === 'video' });
     } catch (e) {
-        // Out of camera/mic permission or no hardware. Answering is impossible,
-        // so tell the caller instead of leaving them ringing for 45s.
-        console.error("Could not get media for incoming call:", e);
-        if (!isInsecureMediaError(e)) showToast("Mic/Camera unavailable — call rejected");
+        if (isInsecureMediaError(e)) {
+            // No secure context at all (file://) — media can never work here.
+            alreadyExplained = true;
+        } else if (type === 'video') {
+            try {
+                stream = await gmGetUserMedia({ audio: true });
+                answeredVoiceOnly = true;
+            } catch (audioErr) {
+                console.error("Could not get media for incoming call:", audioErr);
+            }
+        } else {
+            console.error("Could not get media for incoming call:", e);
+        }
+    }
+    if (!stream) {
+        if (!alreadyExplained) showToast("Mic unavailable — call rejected");
         if (isOffline) sendToPeer(call.peerId, { type: "voip-end" });
         else { try { call.close(); } catch (err) {} }
         pendingIncomingCallEvent = null;
@@ -4027,11 +4208,13 @@ async function acceptIncomingCall() {
         return;
     }
 
+    const mediaType = answeredVoiceOnly ? 'voice' : type;
     localMediaStream = stream;
-    document.getElementById("call-video-toggle-btn").classList.toggle("hidden", type !== 'video');
-    document.getElementById("call-camera-switch-btn").classList.toggle("hidden", type !== 'video');
-    document.getElementById("local-video").classList.toggle("hidden", type !== 'video');
-    if (type === 'video') document.getElementById("local-video").srcObject = stream;
+    if (answeredVoiceOnly) showToast("Camera unavailable — answering with voice only");
+    document.getElementById("call-video-toggle-btn").classList.toggle("hidden", mediaType !== 'video');
+    document.getElementById("call-camera-switch-btn").classList.toggle("hidden", mediaType !== 'video');
+    document.getElementById("local-video").classList.toggle("hidden", mediaType !== 'video');
+    if (mediaType === 'video') document.getElementById("local-video").srcObject = stream;
 
     if (isOffline) {
         const peerId = call.peerId;
@@ -4171,6 +4354,8 @@ function endCurrentCall() {
 }
 
 function endCallFlow() {
+    gmClearCallTimeout();
+    gmSetCallWakeLock(false);
     gmResetBatterySaver();
     stopRingtone();
     playRingtone('end');
@@ -4191,6 +4376,7 @@ function endCallFlow() {
     pendingIncomingCallInfo = null; clearTimeout(incomingCallTimeout);
     activeOfflineCallPeer = null; activeOfflineCallType = null;
 
+    gmToggleCallMore(false);
     document.getElementById("remote-video").srcObject = null;
     document.getElementById("remote-video").classList.add("hidden");
     document.getElementById("local-video").srcObject = null;
@@ -4205,6 +4391,7 @@ function endCallFlow() {
 }
 
 function startCallTimer() {
+    gmClearCallTimeout();
     callSeconds = 0;
     const timerEl = document.getElementById("call-timer");
     timerEl.classList.remove("hidden");
@@ -4217,6 +4404,12 @@ function startCallTimer() {
 }
 
 function stopCallTimer() { clearInterval(callTimerInterval); callSeconds = 0; }
+
+// Android drops the wake lock as soon as the app leaves the foreground, so a
+// call that is still up when the person comes back has to ask for it again.
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && gmCallUiOpen) gmSetCallWakeLock(true);
+});
 
 // ===== LOW BATTERY MODE (calls) =====
 // Pausing the outgoing video track removes the encoder work and most of the
@@ -4336,6 +4529,17 @@ async function openLiveMap() {
 }
 
 function closeLiveMap() { showScreen("chatlist-screen"); }
+
+// Rotation, the keyboard, or Android's system bars changing height all resize
+// the map's box; Leaflet caches its own size, so it has to be told to re-measure
+// or the tiles keep painting for the old (now wrong) viewport.
+function gmMapHandleResize() {
+    const screen = document.getElementById("map-screen");
+    if (!radarMapInstance || !screen || screen.classList.contains("hidden")) return;
+    setTimeout(() => { try { radarMapInstance.invalidateSize(); } catch (e) {} }, 140);
+}
+window.addEventListener("resize", gmMapHandleResize, { passive: true });
+if (window.visualViewport) window.visualViewport.addEventListener("resize", gmMapHandleResize, { passive: true });
 
 // The header menu still calls this (its label is "Radar Map") and the map is
 // now a screen, so the same entry point opens/closes that screen.
@@ -4610,6 +4814,15 @@ function gmConfirmResolve(ok) {
 }
 // The settings header always mirrors the live profile (avatar, display name,
 // Ghost ID), so the sheet opens with real data instead of placeholders.
+function gmToggleMapInfo(force) {
+    const note = document.getElementById("map-info-note");
+    const btn = document.getElementById("map-info-btn");
+    if (!note) return;
+    const open = (typeof force === "boolean") ? force : note.classList.contains("hidden");
+    note.classList.toggle("hidden", !open);
+    if (btn) btn.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
 function gmSyncSettingsHeader() {
     const nameEl = document.getElementById("settings-head-name");
     if (nameEl) nameEl.innerText = userDisplayName || "Ghost";
@@ -4618,6 +4831,7 @@ function gmSyncSettingsHeader() {
     setAvatarDisplay("settings-avatar", userCurrentDP);
     gmAppLockRefreshStatus();
     gmSyncBlockedCount();
+    gmSyncPrivacyRow();
 }
 function openSettingsSheet() { closeAllMenus(); gmSyncSettingsHeader(); showEl("settings-sheet"); }
 function closeSettingsSheet() { hideEl("settings-sheet"); }

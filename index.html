@@ -178,8 +178,10 @@
                         <img src="icon-512.png" width="80" height="80" alt="" style="border-radius:20px;margin-bottom:16px;">
                         <h3>No chats yet</h3>
                         <p>Connect with a Ghost ID, or pair two phones on the same Wi-Fi with a QR code</p>
-                        <button class="primary-btn" style="width:auto;padding:12px 28px;" onclick="openNewConnect()">Connect to Peer</button>
-                        <button class="cancel-btn" style="width:auto;padding:11px 22px;" onclick="startOfflineJoinScan()">Scan a friend's QR</button>
+                        <div class="empty-actions">
+                            <button class="primary-btn empty-btn" onclick="openNewConnect()">Connect to Peer</button>
+                            <button class="cancel-btn empty-btn" onclick="startOfflineJoinScan()">Scan a friend's QR</button>
+                        </div>
                     </div>
                     <!-- Shown by filterChats() when the search box matches nothing -->
                     <div class="search-empty hidden" id="chat-search-empty">
@@ -240,6 +242,10 @@
                         <span class="nearby-count" id="wifi-peer-count">0</span>
                     </div>
                     <div id="wifi-peer-list" class="reach-list"></div>
+                    <!-- Where the other Wi-Fi users show up. The transports keep
+                         their own panel; the Chats tab is the one all-rounder
+                         list (WebRTC + Wi-Fi Direct + Bluetooth). -->
+                    <p class="reach-caption" id="wifi-others-caption">People reachable over Wi-Fi (internet or the same hotspot) appear in <b>Chats</b> and in Nearby Ghosts — together with the Bluetooth ones.</p>
                 </div>
 
                 <!-- The reachable-ghosts list moved to its own Online screen
@@ -538,23 +544,34 @@
          are plotted: your own fix, plus pins from location cards people chose
          to share with you. Nothing here is simulated. -->
     <div id="map-screen" class="app-screen hidden">
+        <!-- Slim bar in normal flow: it cannot be scrolled or dragged away, and
+             the map below it gets every remaining pixel (flex: 1). -->
+        <div class="live-map-top">
+            <button class="live-map-round-btn" onclick="closeLiveMap()" aria-label="Back to chats">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+            </button>
+            <div class="live-map-title">
+                <h3>Live Map</h3>
+                <span id="map-status-line">Finding your location…</span>
+            </div>
+            <button id="map-info-btn" class="live-map-round-btn" onclick="gmToggleMapInfo()" aria-label="About the map" aria-expanded="false">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M11 7h2v2h-2V7zm0 4h2v6h-2v-6zm1-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/></svg>
+            </button>
+            <button class="live-map-round-btn" onclick="gmMapRecenter()" aria-label="Centre the map on me">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm8.94 3A8.99 8.99 0 0 0 13 3.06V1h-2v2.06A8.99 8.99 0 0 0 3.06 11H1v2h2.06A8.99 8.99 0 0 0 11 20.94V23h2v-2.06A8.99 8.99 0 0 0 20.94 13H23v-2h-2.06zM12 19a7 7 0 1 1 0-14 7 7 0 0 1 0 14z"/></svg>
+            </button>
+        </div>
+
+        <!-- The map is its own flex block, so nothing overlaps it and the bars
+             above/below stay put while you pan. -->
         <div class="live-map-wrap">
             <div id="live-radar-map"></div>
+        </div>
 
-            <div class="live-map-top">
-                <button class="live-map-round-btn" onclick="closeLiveMap()" aria-label="Back to chats">
-                    <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
-                </button>
-                <div class="live-map-title">
-                    <h3>Live Map</h3>
-                    <span id="map-status-line">Finding your location…</span>
-                </div>
-                <button class="live-map-round-btn" onclick="gmMapRecenter()" aria-label="Centre the map on me">
-                    <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm8.94 3A8.99 8.99 0 0 0 13 3.06V1h-2v2.06A8.99 8.99 0 0 0 3.06 11H1v2h2.06A8.99 8.99 0 0 0 11 20.94V23h2v-2.06A8.99 8.99 0 0 0 20.94 13H23v-2h-2.06zM12 19a7 7 0 1 1 0-14 7 7 0 0 1 0 14z"/></svg>
-                </button>
-            </div>
-
-            <div class="live-map-panel">
+        <!-- Compact bar, always visible. The long privacy note only opens when
+             asked for (ⓘ above) instead of eating a third of the map. -->
+        <div class="live-map-panel">
+            <div class="live-map-stats">
                 <div class="live-map-row">
                     <span class="live-map-dot you" aria-hidden="true"></span>
                     <span class="live-map-row-text">You</span>
@@ -562,15 +579,15 @@
                 </div>
                 <div class="live-map-row">
                     <span class="live-map-dot peer" aria-hidden="true"></span>
-                    <span class="live-map-row-text">Shared locations</span>
+                    <span class="live-map-row-text">Shared</span>
                     <span class="live-map-row-value" id="map-peer-count">0</span>
                 </div>
-                <div class="live-map-actions">
-                    <button class="credits-earn-btn" onclick="gmMapLocateMe()">Use my location</button>
-                    <button class="credits-earn-btn" onclick="openOnlineUsers()">Nearby Ghosts</button>
-                </div>
-                <p class="live-map-note">Location is off until you allow it. Pins appear only for people who chose to share their position with you — there is no server tracking anyone.</p>
             </div>
+            <div class="live-map-actions">
+                <button class="credits-earn-btn" onclick="gmMapLocateMe()">Use my location</button>
+                <button class="credits-earn-btn" onclick="openOnlineUsers()">Nearby Ghosts</button>
+            </div>
+            <p class="live-map-note hidden" id="map-info-note">Location is off until you allow it. Pins appear only for people who chose to share their position with you — there is no server tracking anyone.</p>
         </div>
     </div>
 
@@ -718,6 +735,10 @@
                     <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM4 12c0-4.42 3.58-8 8-8 1.85 0 3.55.63 4.9 1.68L5.68 16.9C4.63 15.55 4 13.85 4 12zm8 8c-1.85 0-3.55-.63-4.9-1.68L18.32 7.1C19.37 8.45 20 10.15 20 12c0 4.42-3.58 8-8 8z"/></svg>
                     <span class="settings-row-text"><span class="settings-row-title">Blocked Ghosts</span><span class="settings-row-sub">Manage people who cannot reach you · <span id="blocked-count" class="settings-row-state">0</span></span></span>
                 </button>
+                <button class="settings-row" onclick="openPrivacyModeSheet()">
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM9 8V6c0-1.66 1.34-3 3-3s3 1.34 3 3v2H9z"/></svg>
+                    <span class="settings-row-text"><span class="settings-row-title">Account Privacy</span><span class="settings-row-sub">Who can message you · <span id="privacy-mode-state" class="settings-row-state">Private</span></span></span>
+                </button>
                 <button class="settings-row" onclick="closeSettingsSheet();openPrivacyPolicy()">
                     <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
                     <span class="settings-row-text"><span class="settings-row-title">Privacy Policy</span><span class="settings-row-sub">What stays on your phone, in plain words</span></span>
@@ -740,6 +761,34 @@
                 </button>
             </div>
             <button class="cancel-btn" style="width:100%;margin-top:10px;" onclick="closeSettingsSheet()">Close</button>
+        </div>
+    </div>
+
+    <!-- ACCOUNT PRIVACY — a request-to-connect gate, not a discovery switch.
+         Private is the default: a stranger who has your Ghost ID sends a
+         request you accept. Public skips that ask. Whatever is chosen, blocked
+         Ghosts stay blocked and the QR/Wi-Fi handshake is unchanged (pairing in
+         person is already consent). -->
+    <div id="privacy-mode-sheet" class="modal-overlay hidden" role="dialog" aria-label="Account Privacy" onclick="if(event.target===this)closePrivacyModeSheet()">
+        <div class="modal-box privacy-mode-box">
+            <h4>Who can message you</h4>
+            <p class="sub">Your Ghost ID is never listed anywhere — this only decides what happens when somebody already has it.</p>
+            <button class="privacy-opt" id="privacy-opt-private" onclick="gmPickPrivacyMode('private')">
+                <span class="privacy-opt-dot" aria-hidden="true"></span>
+                <span class="privacy-opt-text">
+                    <span class="privacy-opt-title">Private <span class="privacy-opt-badge">Recommended</span></span>
+                    <span class="privacy-opt-sub">Every new person sends a request first. You accept before any chat opens or any call can ring.</span>
+                </span>
+            </button>
+            <button class="privacy-opt" id="privacy-opt-public" onclick="gmPickPrivacyMode('public')">
+                <span class="privacy-opt-dot" aria-hidden="true"></span>
+                <span class="privacy-opt-text">
+                    <span class="privacy-opt-title">Public</span>
+                    <span class="privacy-opt-sub">Anyone who knows your Ghost ID can message you straight away — no request. Block and report still work, and you can switch back any time.</span>
+                </span>
+            </button>
+            <p class="privacy-opt-note">Messages stay peer-to-peer either way. Nothing about you is published.</p>
+            <button class="cancel-btn" style="width:100%;margin-top:10px;" onclick="closePrivacyModeSheet()">Close</button>
         </div>
     </div>
 
@@ -1216,35 +1265,81 @@
         <p id="call-timer" class="call-timer hidden">00:00</p>
     </div>
 
-    <!-- Incoming call overlay: clean, accept/reject only -->
-    <div id="incoming-call-overlay" class="incoming-call-overlay hidden">
-        <button onclick="rejectIncomingCall()" class="incoming-btn incoming-reject" aria-label="Decline call">
-            <svg viewBox="0 0 24 24" fill="white" width="26" height="26"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" transform="rotate(135 12 12)"/></svg>
-        </button>
-        <button onclick="acceptIncomingCall()" class="incoming-btn incoming-accept" aria-label="Accept call">
-            <svg viewBox="0 0 24 24" fill="white" width="26" height="26"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
-        </button>
+    <!-- Incoming call: the whole screen rings, like a phone dialer. The ring
+         layer replaces the in-call top bar and controls while it is up, so the
+         only things on screen are who is calling and the two answers. -->
+    <div id="incoming-call-overlay" class="incoming-call-overlay hidden" role="dialog" aria-modal="true" aria-label="Incoming call">
+        <div class="incoming-head">
+            <p class="incoming-app">Ghost Mesh</p>
+            <h3 id="incoming-peer-name">Ghost User</h3>
+            <p id="incoming-call-kind" class="incoming-kind">Incoming call</p>
+        </div>
+        <div class="incoming-avatar-ring">
+            <div id="incoming-avatar" class="default-avatar call-size">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="52" height="52"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>
+            </div>
+        </div>
+        <div class="incoming-actions">
+            <div class="incoming-action">
+                <button onclick="rejectIncomingCall()" class="incoming-btn incoming-reject" aria-label="Decline call">
+                    <svg viewBox="0 0 24 24" fill="white" width="26" height="26"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" transform="rotate(135 12 12)"/></svg>
+                </button>
+                <span class="incoming-action-label">Decline</span>
+            </div>
+            <div class="incoming-action">
+                <button onclick="acceptIncomingCall()" class="incoming-btn incoming-accept" aria-label="Accept call">
+                    <svg viewBox="0 0 24 24" fill="white" width="26" height="26"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
+                </button>
+                <span class="incoming-action-label">Accept</span>
+            </div>
+        </div>
     </div>
 
-    <!-- Bottom controls: Mute, Video toggle, End Call, Speaker -->
+    <!-- Bottom controls, deliberately short — the same handful a phone dialer
+         shows: Mute · Camera · End · Speaker · More. Camera switching and the
+         battery saver live behind More instead of crowding the row. -->
     <div class="call-bottom-controls">
-        <button id="mute-btn" onclick="toggleMute()" class="call-ctrl-btn" aria-label="Mute microphone">
-            <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg>
+        <div class="call-ctrl-item">
+            <button id="mute-btn" onclick="toggleMute()" class="call-ctrl-btn" aria-label="Mute microphone">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg>
+            </button>
+            <span class="call-ctrl-label">Mute</span>
+        </div>
+        <div class="call-ctrl-item">
+            <button id="call-video-toggle-btn" onclick="toggleCallVideo()" class="call-ctrl-btn hidden" aria-label="Turn camera on or off">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>
+            </button>
+            <span class="call-ctrl-label">Camera</span>
+        </div>
+        <div class="call-ctrl-item">
+            <button onclick="endCurrentCall()" class="call-end-btn" aria-label="End call">
+                <svg viewBox="0 0 24 24" fill="white" width="28" height="28"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" transform="rotate(135 12 12)"/></svg>
+            </button>
+            <span class="call-ctrl-label">End</span>
+        </div>
+        <div class="call-ctrl-item">
+            <button id="speaker-btn" onclick="toggleSpeaker()" class="call-ctrl-btn" aria-label="Toggle speaker">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+            </button>
+            <span class="call-ctrl-label">Speaker</span>
+        </div>
+        <div class="call-ctrl-item">
+            <button id="call-more-btn" onclick="gmToggleCallMore()" class="call-ctrl-btn" aria-label="More call options" aria-expanded="false">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+            </button>
+            <span class="call-ctrl-label">More</span>
+        </div>
+    </div>
+
+    <!-- "More" sheet: the two controls that used to sit in the row above -->
+    <div id="call-more-sheet" class="call-more-sheet hidden">
+        <button id="call-camera-switch-btn" onclick="switchCallCamera()" class="call-more-item hidden">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg>
+            <span>Switch camera</span>
         </button>
-        <button id="call-video-toggle-btn" onclick="toggleCallVideo()" class="call-ctrl-btn hidden" aria-label="Turn camera on or off">
-            <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>
-        </button>
-        <button id="call-camera-switch-btn" onclick="switchCallCamera()" class="call-ctrl-btn hidden" aria-label="Switch camera">
-            <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M20 4h-3.17L15 2H9L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 13c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm5.5-9.5L15 6h-2l-1.5 1.5H9L7.5 6h-1L5 7.5V6H4v2h1.5L7 6.5h1.5L10 8h4l1.5-1.5H17V8h1V6h-1.5z"/></svg>
-        </button>
-        <button id="call-battery-btn" onclick="toggleLowBatteryMode()" class="call-ctrl-btn" aria-label="Toggle low battery mode">
-            <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M15.67 4H14V2h-4v2H8.33C7.6 4 7 4.6 7 5.33v15.33C7 21.4 7.6 22 8.33 22h7.33c.74 0 1.34-.6 1.34-1.33V5.33C17 4.6 16.4 4 15.67 4zM11 20v-5.5H9L13 7v5.5h2L11 20z"/></svg>
-        </button>
-        <button onclick="endCurrentCall()" class="call-end-btn" aria-label="End call">
-            <svg viewBox="0 0 24 24" fill="white" width="26" height="26"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" transform="rotate(135 12 12)"/></svg>
-        </button>
-        <button id="speaker-btn" onclick="toggleSpeaker()" class="call-ctrl-btn" aria-label="Toggle speaker">
-            <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+        <button id="call-battery-btn" onclick="toggleLowBatteryMode()" class="call-more-item" aria-label="Toggle low battery mode">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M15.67 4H14V2h-4v2H8.33C7.6 4 7 4.6 7 5.33v15.33C7 21.4 7.6 22 8.33 22h7.33c.74 0 1.34-.6 1.34-1.33V5.33C17 4.6 16.4 4 15.67 4zM11 20v-5.5H9L13 7v5.5h2L11 20z"/></svg>
+            <span>Low battery mode</span>
         </button>
     </div>
 </div>

@@ -454,12 +454,29 @@ body {
 .search-bar input::placeholder { color: var(--text3); }
 
 /* ===== LIVE MAP ===== */
-/* The map is its own full-screen screen now (bottom nav → Map), so the tile
-   canvas takes every pixel the app has and the chrome floats on top of it. */
-#map-screen { position: relative; padding: 0; overflow: hidden; }
+/* The map is its own fixed, full-screen screen (bottom nav → Map) with three
+   children in normal flow: a slim bar, the map, and a compact bar. Nothing is
+   absolutely positioned over the map, so panning/zooming/dragging cannot take
+   the chrome away — which is exactly how the top bar and the bottom card used
+   to vanish mid-use. The map simply takes whatever space is left (flex: 1). */
+#map-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    overscroll-behavior: none;
+    /* Room for the floating pill nav (z-index 900, above this screen). */
+    padding-bottom: calc(var(--gm-nav-h) + env(safe-area-inset-bottom, 0px));
+}
 /* z-index: 0 makes this the map's own stacking context, so Leaflet's panes and
    controls (z-index 200-800 internally) stay under the app's floating nav. */
-.live-map-wrap { position: absolute; inset: 0; z-index: 0; overflow: hidden; }
+.live-map-wrap {
+    position: relative; flex: 1 1 auto; min-height: 0;
+    z-index: 0; overflow: hidden;
+    touch-action: none;
+}
 #live-radar-map { width: 100%; height: 100%; background: var(--bg2); }
 /* Leaflet paints a white/grey background of its own; the app is dark. */
 .live-map-wrap .leaflet-container { background: var(--bg2); font-family: inherit; }
@@ -471,19 +488,14 @@ body {
 .live-map-wrap .leaflet-control-attribution a { color: var(--text2) !important; }
 
 .live-map-top {
-    position: absolute;
-    top: calc(10px + env(safe-area-inset-top, 0px));
-    left: 10px; right: 10px;
-    z-index: 500;
+    flex: 0 0 auto;
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 8px 10px;
+    padding: calc(8px + env(safe-area-inset-top, 0px)) 12px 8px;
     background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 18px;
-    backdrop-filter: blur(14px);
-    box-shadow: 0 10px 26px rgba(0,0,0,0.45);
+    border-bottom: 1px solid var(--border);
+    z-index: 5;
 }
 .live-map-title { flex: 1; min-width: 0; }
 .live-map-title h3 { font-size: 15px; color: var(--text); line-height: 1.2; }
@@ -508,17 +520,19 @@ body {
 .live-map-round-btn:active { transform: scale(0.94); }
 
 .live-map-panel {
-    position: absolute;
-    left: 10px; right: 10px;
-    bottom: calc(var(--gm-nav-h) + 14px + env(safe-area-inset-bottom, 0px));
-    z-index: 500;
-    padding: 12px 14px 13px;
+    flex: 0 0 auto;
+    padding: 8px 14px 10px;
     background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 18px;
-    backdrop-filter: blur(14px);
-    box-shadow: 0 14px 34px rgba(0,0,0,0.5);
+    border-top: 1px solid var(--border);
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
 }
+/* The two counters share one line so the bar stays short and the map keeps the
+   rest of the screen. */
+.live-map-stats { display: flex; gap: 14px; flex-wrap: wrap; }
+.live-map-stats .live-map-row { flex: 1 1 auto; min-width: 0; }
 .live-map-row {
     display: flex; align-items: center; gap: 8px;
     font-size: 12px; color: var(--text2);
@@ -529,14 +543,58 @@ body {
 .live-map-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
 .live-map-dot.you { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .live-map-dot.peer { background: var(--success); }
-.live-map-actions { display: flex; gap: 8px; margin-top: 9px; }
+.live-map-actions { display: flex; gap: 8px; }
 .live-map-actions .credits-earn-btn { flex: 1; justify-content: center; padding: 9px 10px; }
 .live-map-note {
-    margin: 9px 0 0;
-    font-size: 10px;
+    margin: 2px 0 0;
+    font-size: 10.5px;
     line-height: 1.5;
     color: var(--text3);
 }
+
+/* One short line under a transport list, so nobody has to guess where the
+   internet/Wi-Fi peers went (Chats is the all-transport list). */
+.reach-caption {
+    margin: 8px 0 0;
+    font-size: 10.5px;
+    line-height: 1.5;
+    color: var(--text3);
+}
+.reach-caption b { color: var(--text2); }
+
+/* ---- Account privacy chooser --------------------------------------- */
+.privacy-mode-box { max-width: 400px; }
+.privacy-opt {
+    display: flex; align-items: flex-start; gap: 11px;
+    width: 100%; text-align: left;
+    margin-top: 10px; padding: 13px 14px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    color: var(--text);
+    cursor: pointer;
+}
+.privacy-opt:active { transform: scale(0.99); }
+.privacy-opt.selected { border-color: var(--accent); background: var(--accent-soft); }
+.privacy-opt-dot {
+    flex: 0 0 auto; width: 16px; height: 16px; margin-top: 2px;
+    border-radius: 50%;
+    border: 2px solid var(--border2);
+    background: transparent;
+}
+.privacy-opt.selected .privacy-opt-dot {
+    border-color: var(--accent);
+    box-shadow: inset 0 0 0 4px var(--accent);
+}
+.privacy-opt-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.privacy-opt-title { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 7px; }
+.privacy-opt-badge {
+    font-size: 9.5px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
+    color: var(--accent); border: 1px solid var(--accent);
+    border-radius: 999px; padding: 1px 7px;
+}
+.privacy-opt-sub { font-size: 12px; line-height: 1.45; color: var(--text2); }
+.privacy-opt-note { margin: 12px 0 0; font-size: 11px; line-height: 1.5; color: var(--text3); }
 .map-connect-btn {
     background: var(--accent); color: white;
     border: none; padding: 6px 12px;
@@ -555,6 +613,19 @@ body {
 }
 .empty-state h3 { font-size: 20px; color: var(--text); }
 .empty-state p { color: var(--text2); font-size: 14px; margin-bottom: 8px; }
+/* The buttons in the empty state used to inherit `.cancel-btn { flex: 1 }`,
+   which inside this column flex box stretched them into tall blocks (the
+   "Scan a friend's QR" giant square). They are inline actions here, so they
+   keep their own size and sit side by side when the screen is wide enough. */
+.empty-state .empty-actions {
+    display: flex; flex-wrap: wrap; gap: 10px; justify-content: center;
+    margin-top: 4px;
+}
+.empty-state .empty-btn {
+    flex: 0 0 auto; width: auto;
+    padding: 11px 22px; min-height: 46px;
+    font-size: 14px; border-radius: 12px;
+}
 
 /* Search with no matches — same shape as .empty-state, lighter weight, and
    hidden again as soon as a chat matches. */
@@ -1129,11 +1200,42 @@ body {
 .call-bottom-controls {
     position: absolute; left: 0; right: 0; bottom: 0;
     z-index: 20;
-    display: flex; align-items: center; justify-content: center;
-    gap: 22px;
-    padding: 18px 20px max(22px, env(safe-area-inset-bottom));
-    background: linear-gradient(0deg, rgba(0,0,0,0.6), transparent);
+    display: flex; align-items: flex-start; justify-content: space-around;
+    gap: 6px;
+    padding: 18px 12px max(20px, env(safe-area-inset-bottom));
+    background: linear-gradient(0deg, rgba(0,0,0,0.62), transparent);
 }
+.call-ctrl-item {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    min-width: 54px;
+}
+.call-ctrl-label {
+    color: rgba(255,255,255,0.8); font-size: 11.5px; letter-spacing: 0.2px;
+}
+
+/* "More" sheet: switch camera + battery saver, instead of six identical
+   circles competing for attention in the row above. */
+.call-more-sheet {
+    position: absolute; left: 12px; right: 12px;
+    bottom: calc(120px + env(safe-area-inset-bottom));
+    z-index: 22;
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 6px;
+    background: rgba(24,18,34,0.94);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 16px;
+    box-shadow: 0 12px 30px rgba(0,0,0,0.5);
+}
+.call-more-item {
+    display: flex; align-items: center; gap: 12px;
+    width: 100%; padding: 13px 14px;
+    background: none; border: none; border-radius: 12px;
+    color: #fff; font-size: 14px; font-weight: 600; text-align: left;
+    cursor: pointer;
+}
+.call-more-item:active { background: rgba(255,255,255,0.12); }
+.call-more-item.battery-on { background: rgba(34,197,94,0.28); }
+.call-more-item svg { flex-shrink: 0; opacity: 0.85; }
 .call-ctrl-btn {
     width: 54px; height: 54px;
     border-radius: 50%;
@@ -1156,21 +1258,45 @@ body {
     flex-shrink: 0;
 }
 
-/* Incoming call overlay — just accept/reject, nothing else */
+/* Incoming call — a full-screen ringing layer, dialer style. The old version
+   was a thin strip pinned to the bottom, easy to miss and easy to hit by
+   accident; this one takes the whole screen and hides everything else. */
 .incoming-call-overlay {
-    position: absolute; left: 0; right: 0; bottom: 0;
-    z-index: 25;
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 0 60px max(40px, env(safe-area-inset-bottom));
-    background: linear-gradient(0deg, rgba(0,0,0,0.65), transparent 60%);
+    position: absolute; inset: 0;
+    z-index: 30;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: space-between;
+    padding: max(46px, calc(env(safe-area-inset-top) + 30px)) 24px max(46px, calc(env(safe-area-inset-bottom) + 34px));
+    text-align: center;
+    background: radial-gradient(circle at 50% 32%, #2b1f45, #0b0710 72%);
 }
+.incoming-head { display: flex; flex-direction: column; gap: 6px; }
+.incoming-app {
+    margin: 0; font-size: 12px; letter-spacing: 2.4px; text-transform: uppercase;
+    color: rgba(255,255,255,0.55);
+}
+.incoming-head h3 { margin: 0; color: #fff; font-size: 26px; font-weight: 700; }
+.incoming-kind { margin: 0; color: rgba(255,255,255,0.75); font-size: 14px; }
+.incoming-avatar-ring { position: relative; display: flex; align-items: center; justify-content: center; }
+.incoming-avatar-ring::before {
+    content: "";
+    position: absolute; width: 190px; height: 190px; border-radius: 50%;
+    background: rgba(124,92,255,0.16);
+}
+.incoming-actions {
+    display: flex; align-items: flex-start; justify-content: center;
+    gap: 74px; width: 100%;
+}
+.incoming-action { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.incoming-action-label { color: rgba(255,255,255,0.8); font-size: 12.5px; }
 .incoming-btn {
-    width: 64px; height: 64px;
+    width: 68px; height: 68px;
     border-radius: 50%;
     border: none; color: white;
     display: flex; align-items: center; justify-content: center;
     cursor: pointer;
 }
+.incoming-btn:active { transform: scale(0.94); }
 .incoming-reject { background: #ef4444; box-shadow: 0 4px 18px rgba(239,68,68,0.5); }
 .incoming-accept { background: #22c55e; box-shadow: 0 4px 18px rgba(34,197,94,0.5); }
 
@@ -1459,8 +1585,15 @@ body.theme-whatsapp .msg-tick.read {
 /* The root screen cross-fades; pushed screens (chat, profile, themes) slide
    in from the right, the Android convention. gmAnimateScreen() in script.js
    adds these classes and removes them again so they can replay on re-entry. */
-.gm-screen-fade { animation: gmScreenFade 0.26s var(--gm-ease) both; }
-.gm-screen-push { animation: gmScreenPush 0.3s var(--gm-ease) both; }
+/* `animation-fill-mode: none` on purpose: with `both` the closing keyframe
+   stayed applied, leaving a permanent transform on the screen element. A
+   lingering transform turns that element into the containing block for
+   absolutely-positioned descendants and keeps a composited layer alive, which
+   is how the map's top bar and bottom card used to end up painted away on
+   Android until something forced a repaint. The keyframes end on the element's
+   own values, so dropping the fill mode changes nothing visually. */
+.gm-screen-fade { animation: gmScreenFade 0.26s var(--gm-ease) none; }
+.gm-screen-push { animation: gmScreenPush 0.3s var(--gm-ease) none; }
 
 @keyframes gmScreenFade {
     from { opacity: 0; transform: translateY(8px); }
