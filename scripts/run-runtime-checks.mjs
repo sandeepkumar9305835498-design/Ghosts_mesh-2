@@ -65,7 +65,10 @@ ok("no console.error during boot", !(window.__consoleErrors || []).length, (wind
 // ------------------------------------------------------- new functions exist
 for (const fn of ["gmConfirm", "gmConfirmResolve", "openSettingsSheet", "closeSettingsSheet",
     "claimDailyBonus", "msUntilBonus", "formatBonusWait", "pasteCodeManually", "gmClosePasteModal",
-    "gmSubmitPasteCode", "scanQrFromImage", "gmHandleQrImage", "startCameraScan"]) {
+    "gmSubmitPasteCode", "scanQrFromImage", "gmHandleQrImage", "startCameraScan",
+    "gmSetBluetoothScan", "gmRefreshBluetoothPeers", "openLiveMap", "closeLiveMap",
+    "saveProfilePhone", "gmOpenSponsoredBreak", "gmClaimSponsoredCredits", "gmDpCropOpen",
+    "gmDpCropApply", "gmDpCropCancel"]) {
     ok(`window.${fn} is a function`, typeof window[fn] === "function", typeof window[fn]);
 }
 
@@ -107,7 +110,7 @@ ok("a stale answer cannot fire an old callback", cancelRan === false);
 // ------------------------------------------------------- daily bonus
 window.claimDailyBonus();
 const afterBonus = window.getCredits();
-ok("daily bonus adds 5 credits", afterBonus === creditsAfterLogin + 5, "credits=" + afterBonus);
+ok("daily bonus adds 2 credits", afterBonus === creditsAfterLogin + 2, "credits=" + afterBonus);
 ok("daily bonus starts the 24h cooldown", window.msUntilBonus() > 23 * 60 * 60 * 1000, "wait=" + window.msUntilBonus());
 ok("bonus toast has no emoji", !/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(toastText()), JSON.stringify(toastText()));
 
@@ -204,10 +207,12 @@ ok("an empty image pick is ignored", true);
 const navItems = [...doc.querySelectorAll("#gm-bottom-nav .gm-nav-item")];
 const navKeys = navItems.map(b => b.getAttribute("data-nav"));
 ok("the pill nav has exactly 4 destinations", navItems.length === 4, String(navItems.length));
-ok("the pill nav is Chats / WiFi / Online / Settings, in that order",
-    navKeys.join(",") === "chats,wifi,online,settings", navKeys.join(","));
+ok("the pill nav is Chats / WiFi / Bluetooth / Map, in that order",
+    navKeys.join(",") === "chats,wifi,bluetooth,map", navKeys.join(","));
 ok("Connect is not a pill nav destination any more", !navKeys.includes("connect"));
 ok("Profile is no longer a pill nav destination", !navKeys.includes("profile"));
+ok("Settings left the pill nav for the 3-dot menu", !navKeys.includes("settings"));
+ok("the 3-dot menu opens Settings", /openSettingsSheet\(/.test($("main-menu").innerHTML));
 ok("every pill nav item is wired to gmNavGo with its own key",
     navItems.every(b => b.getAttribute("onclick") === "gmNavGo('" + b.getAttribute("data-nav") + "')"));
 // The top tab bar did the same job as the pill nav, so it was removed. The two
@@ -215,8 +220,8 @@ ok("every pill nav item is wired to gmNavGo with its own key",
 ok("the redundant top tab bar is gone",
     doc.querySelectorAll(".main-tab-btn").length === 0 && doc.querySelector(".main-tabs-bar") === null,
     String(doc.querySelectorAll(".main-tab-btn").length));
-ok("both panels still exist behind the pill nav",
-    !!$("main-tabs-scroller") && !!$("main-tab-panel-0") && !!$("main-tab-panel-1"));
+ok("all three panels still exist behind the pill nav",
+    !!$("main-tabs-scroller") && !!$("main-tab-panel-0") && !!$("main-tab-panel-1") && !!$("main-tab-panel-2"));
 
 // Settings is a sheet, so the highlight must stay on the tab the user came from.
 window.gmNavGo("wifi");
@@ -234,14 +239,12 @@ ok("the WiFi destination highlights the WiFi nav item",
     doc.querySelector('.gm-nav-item[data-nav="wifi"]').classList.contains("active"));
 ok("the WiFi destination shows the pill nav", hidden("gm-bottom-nav") === false);
 
-// The Online screen is its own destination (the nav slot Profile used to hold),
-// reached from the pill nav and from the header menu's "Nearby Ghosts".
+// The Online screen is reached from the header menu's "Nearby Ghosts" (the
+// every-transport list); the nav no longer parks a highlight there.
 window.openProfile();
 window.openOnlineUsers();
 ok("Nearby Ghosts opens the Online screen",
     hidden("online-screen") === false && hidden("profile-screen") === true);
-ok("the Online screen highlights its nav item",
-    doc.querySelector('.gm-nav-item[data-nav="online"]').classList.contains("active"));
 ok("the Online screen explains what it lists",
     /Bluetooth or Wi-Fi Direct/.test($("online-screen").textContent));
 window.closeOnlineScreen();
@@ -362,10 +365,12 @@ ok("the reply QR path fills the box (or explains itself)",
 ok("the reply QR never reports a bogus 'too large' error",
     !/too large/i.test(toastText()), JSON.stringify(toastText()));
 
-// The radar map used to be built at login, which fetched OpenStreetMap tiles
-// for a map nobody had opened (bandwidth, battery, and an IP/area leak).
-ok("the radar map is not built until it is opened",
-    doc.querySelectorAll('script[src="leaflet.js"]').length === 0 && hidden("map-container") === true);
+// The map used to be a 240px strip inside the Chats panel; it is a full-screen
+// destination now, built only when it is opened.
+ok("the old inline map strip is gone", $("map-container") === null);
+ok("the map screen is hidden until it is opened", hidden("map-screen") === true);
+ok("the map is not built at boot",
+    doc.querySelectorAll('script[src="leaflet.js"]').length === 0);
 
 // Android's status bar follows the theme-colour meta tag.
 window.applyTheme("ocean");
@@ -631,6 +636,203 @@ await new Promise(r => setTimeout(r, 300));
 ok("the right PIN unlocks the idle-locked app",
     hidden("lock-screen") === true && hidden("login-screen") === false,
     "lock=" + hidden("lock-screen") + " login=" + hidden("login-screen"));
+
+// ------------------------------------- Bluetooth / Wi-Fi / Chats split
+{
+    // One phone found over BLE, one over Wi-Fi Direct — the native layer pushes
+    // both into the same table with a `transport` tag.
+    window.gmApplyNativePeers([
+        { ghostId: "Ghost-BT1", name: "BT Phone", transport: "ble", address: "AA:BB:CC" },
+        { ghostId: "Ghost-WF1", name: "WiFi Phone", transport: "wifi-direct", address: "wf-1" }
+    ]);
+    const btText = $("bt-peer-list").textContent;
+    const wifiText = $("wifi-peer-list").textContent;
+    ok("the Bluetooth panel lists only BLE phones",
+        /Ghost-BT1/.test(btText) && !/Ghost-WF1/.test(btText), btText);
+    ok("the WiFi panel lists only Wi-Fi Direct phones",
+        /Ghost-WF1/.test(wifiText) && !/Ghost-BT1/.test(wifiText), wifiText);
+    ok("each transport panel counts its own phones",
+        Number($("bt-peer-count").innerText) === 1 && Number($("wifi-peer-count").innerText) === 1,
+        $("bt-peer-count").innerText + "/" + $("wifi-peer-count").innerText);
+    ok("the Chats strip shows peers from every transport",
+        /BT Phone/.test($("online-strip-list").textContent) &&
+        /WiFi Phone/.test($("online-strip-list").textContent),
+        $("online-strip-list").textContent);
+
+    // Tapping Connect on a Bluetooth phone must not fire a Wi-Fi Direct join at
+    // a BLE address; it explains the link and opens the route that works.
+    const nativeCalls = [];
+    window.GhostNative = { connect: address => nativeCalls.push(address), startDiscovery() {}, stopDiscovery() {} };
+    window.gmConnectNativePeer("Ghost-BT1");
+    ok("connecting to a Bluetooth phone explains how the chat link opens",
+        hidden("gm-confirm") === false && /Chat over Bluetooth/.test($("gm-confirm-title").innerText),
+        $("gm-confirm-title").innerText);
+    // The QR handshake itself needs a real WebRTC stack (jsdom has none), so the
+    // wiring is checked instead: the confirm must land on the WiFi tab and ask
+    // for the host QR, and must never touch the native Wi-Fi Direct join.
+    let hostQrAsked = 0;
+    const realStartOfflineHost = window.startOfflineHost;
+    window.startOfflineHost = () => { hostQrAsked++; };
+    window.gmConfirmResolve(true);
+    ok("accepting it never hands a BLE address to the Wi-Fi Direct join",
+        nativeCalls.length === 0, JSON.stringify(nativeCalls));
+    ok("accepting it opens the QR handshake on the WiFi tab",
+        hostQrAsked === 1 && $("main-tabs-scroller").dataset.activeTab === "1",
+        "qrAsked=" + hostQrAsked + " tab=" + $("main-tabs-scroller").dataset.activeTab);
+    window.startOfflineHost = realStartOfflineHost;
+    window.closeOfflineConnect();
+    window.gmConnectNativePeer("Ghost-WF1");
+    ok("connecting to a Wi-Fi Direct phone goes straight to the native join",
+        hidden("gm-confirm") === true && nativeCalls.length === 1 && nativeCalls[0] === "wf-1",
+        JSON.stringify(nativeCalls));
+    delete window.GhostNative;
+
+    window.gmNavGo("bluetooth");
+    ok("the Bluetooth destination selects the third panel",
+        $("main-tabs-scroller").dataset.activeTab === "2",
+        String($("main-tabs-scroller").dataset.activeTab));
+    ok("the Bluetooth destination highlights its nav item",
+        doc.querySelector('.gm-nav-item[data-nav="bluetooth"]').classList.contains("active"));
+    ok("the Bluetooth panel explains what it does",
+        /Bluetooth finds the other phone/.test($("main-tab-panel-2").textContent));
+    ok("Bluetooth discovery says it needs the Android app on the web",
+        /Android app/.test($("bt-status-line").innerText), $("bt-status-line").innerText);
+    window.gmSetBluetoothScan(false);
+    ok("turning Bluetooth discovery off is safe without the native layer",
+        hidden("main-tab-panel-2") === false);
+    window.gmApplyNativePeers([]);          // clear the fake table again
+    ok("the transport lists empty out with no phones",
+        !/Ghost-BT1|Ghost-WF1/.test($("bt-peer-list").textContent + $("wifi-peer-list").textContent) &&
+        Number($("bt-peer-count").innerText) === 0);
+}
+
+// ------------------------------------------------------- full-screen map
+{
+    await window.openLiveMap();
+    ok("the Map destination opens the map screen", hidden("map-screen") === false);
+    ok("the Map destination highlights its nav item",
+        doc.querySelector('.gm-nav-item[data-nav="map"]').classList.contains("active"));
+    ok("the map screen carries its own controls",
+        !!$("live-radar-map") && !!$("map-status-line") && !!$("map-my-coords") && !!$("map-peer-count"));
+    // jsdom has no layout, so static markup reads through textContent while a
+    // value the app wrote itself reads through innerText.
+    ok("the map reads no location until asked",
+        $("map-my-coords").textContent === "—" && $("map-status-line").innerText.trim() !== "",
+        $("map-my-coords").textContent);
+    window.closeLiveMap();
+    ok("closing the map returns to the chats",
+        hidden("chatlist-screen") === false && hidden("map-screen") === true);
+}
+
+// ------------------------------------------------ editable phone number
+{
+    window.openProfile();
+    $("profile-phone-input").value = "9876543210";
+    window.gmProfilePhoneDirty();
+    ok("editing the phone reveals its own Save button", hidden("profile-phone-save-btn") === false);
+    window.saveProfilePhone();
+    ok("saving the phone number says so", toastText() === "Phone number saved!", toastText());
+    ok("the phone Save button hides again", hidden("profile-phone-save-btn") === true);
+    window.updateProfileScreen();
+    ok("the saved phone shows up in the profile field",
+        $("profile-phone-input").value === "9876543210", $("profile-phone-input").value);
+    $("profile-phone-input").value = "123";
+    window.saveProfilePhone();
+    ok("an incomplete phone number is rejected",
+        toastText() === "That phone number looks incomplete", toastText());
+    $("profile-phone-input").value = "9876543210";
+    window.saveProfilePhone();
+    window.closeProfile();
+}
+
+// ------------------------------------------- sponsor break (+2 credits)
+{
+    // A duration long enough that "claiming early" is still early when the test
+    // reaches it, but short enough that the suite does not sit through 15s.
+    window.GM_AD_DURATION_MS = 400;
+    const before = window.getCredits();
+    window.gmOpenSponsoredBreak("earn");
+    ok("the Earn Credits menu entry opens the sponsor break", hidden("gm-ad-screen") === false);
+    ok("the advertiser slot is filled", $("gm-ad-slot").innerHTML.trim() !== "");
+    ok("the rewarded break names the 2-credit reward",
+        /\+2 credits/.test($("gm-ad-title").innerText), $("gm-ad-title").innerText);
+    ok("the claim waits for the view to finish", hidden("gm-ad-claim") === true);
+    window.gmClaimSponsoredCredits();
+    ok("claiming early pays nothing",
+        window.getCredits() === before && /full sponsor break/.test(toastText()), toastText());
+    await new Promise(r => setTimeout(r, 900));
+    ok("the claim appears once the view finishes", hidden("gm-ad-claim") === false);
+    window.gmClaimSponsoredCredits();
+    ok("watching a sponsor adds 2 credits", window.getCredits() === before + 2, "credits=" + window.getCredits());
+    ok("the break closes after claiming", hidden("gm-ad-screen") === true);
+    ok("one sponsor view is counted for today", window.gmAdViewsLeft() === 9, String(window.gmAdViewsLeft()));
+
+    // The daily cap keeps the credit economy finite. jsdom refuses
+    // window.localStorage on a file:// origin, so the count comes in through the
+    // app's own reader instead of a raw storage key.
+    const realViewsToday = window.gmAdViewsToday;
+    window.gmAdViewsToday = () => 10;
+    window.gmOpenSponsoredBreak("earn");
+    ok("the daily sponsor limit is enforced",
+        hidden("gm-ad-screen") === true && /Daily sponsor limit/.test(toastText()), toastText());
+    window.gmAdViewsToday = realViewsToday;
+    ok("the limit leaves the credit balance untouched", window.getCredits() === before + 2);
+}
+
+// ----------------------------------- theme change is the only automatic ad
+{
+    window.GM_AD_DURATION_MS = 300;
+    window.applyTheme("forest", true);
+    ok("changing the theme shows the sponsor break", hidden("gm-ad-screen") === false);
+    ok("the theme break offers no credits", hidden("gm-ad-claim") === true);
+    await new Promise(r => setTimeout(r, 800));
+    ok("the theme break finishes with Continue", hidden("gm-ad-continue") === false);
+    window.gmCloseSponsoredBreak();
+    ok("the theme break closes", hidden("gm-ad-screen") === true);
+    window.applyTheme("forest");
+    ok("restoring the theme (boot / fallback) shows no break", hidden("gm-ad-screen") === true);
+    delete window.GM_AD_DURATION_MS;
+    window.applyTheme("default");
+}
+
+// ------------------------------------------- profile photo adjuster
+{
+    const photo = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='800' height='600'></svg>";
+    window.gmDpCropOpen(photo);
+    ok("picking a photo opens the adjuster instead of saving it straight away",
+        hidden("dp-crop-modal") === false);
+    ok("the adjuster has a zoom control and a round preview",
+        !!$("dp-crop-zoom") && !!$("dp-crop-viewport") && !!$("dp-crop-image"));
+    ok("the adjusting step runs before the photo is stored",
+        toastText() !== "Profile photo updated!", toastText());
+    window.gmDpCropZoom(2.5);
+    ok("zooming the photo does not throw", true);
+    window.gmDpCropApply();
+    await new Promise(r => setTimeout(r, 60));
+    ok("using the photo saves it and says so",
+        toastText() === "Profile photo updated!" && hidden("dp-crop-modal") === true, toastText());
+    ok("the saved photo is the profile picture",
+        /data:image/.test($("profile-avatar-big").innerHTML));
+    window.gmDpCropOpen(photo);
+    window.gmDpCropCancel();
+    ok("cancelling the adjuster keeps the old photo and closes",
+        hidden("dp-crop-modal") === true && /data:image/.test($("profile-avatar-big").innerHTML));
+}
+
+// ---------------------------------------------- nothing logged an error
+// The boot check above only covers first paint; this one covers every flow the
+// suite walked — the map, the radios, the sponsor break and the photo adjuster
+// included. A flow that copies the old failure mode (a swallowed exception
+// inside a try/catch, say) shows up here instead of only on a phone.
+//
+// One scanner test deliberately feeds a malformed pasted code; the offline
+// handshake catches it, logs it and toasts "Invalid code". That is the only
+// expected noise, and the count is pinned exactly, so any *new* error — in any
+// flow — still fails this check.
+const EXPECTED_DELIBERATE_QR_LOGS = 1;
+ok("no console.error during the whole run apart from the deliberate bad QR payloads",
+    (window.__consoleErrors || []).length === EXPECTED_DELIBERATE_QR_LOGS,
+    "got " + (window.__consoleErrors || []).length + ": " + (window.__consoleErrors || []).join(" | "));
 
 // ---------------------------------------------------------------- report
 let failed = 0;

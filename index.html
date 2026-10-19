@@ -122,6 +122,12 @@
                             <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
                             Radar Map
                         </div>
+                        <!-- Earn credits lives here (tucked in the 3-dot menu, not
+                             on any main screen): a short sponsor break pays +2. -->
+                        <div class="menu-item" role="button" tabindex="0" onclick="gmOpenSponsoredBreak('earn')">
+                            <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h10v2H4v-2zm13 .5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7zm1.8 3.5h-1.2v1.2h-1.2V20h-1.2v-1.2h-1.2v-1.2h1.2v-1.2h1.2v1.2h1.2v1.2z"/></svg>
+                            Earn Credits — Watch a Sponsor (+2)
+                        </div>
                         <div class="menu-item" role="button" tabindex="0" onclick="toggleGhostMode()">
                             <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78l3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z"/></svg>
                             <span id="ghost-mode-label">Ghost Mode: Off</span>
@@ -129,6 +135,10 @@
                         <div class="menu-item" role="button" tabindex="0" onclick="toggleNotifications()">
                             <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
                             <span id="notif-label">Notifications: On</span>
+                        </div>
+                        <div class="menu-item" role="button" tabindex="0" onclick="openSettingsSheet()">
+                            <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M19.14 12.94a7.1 7.1 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.3 7.3 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.1 7.1 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.22.39.3.6.22l2.39-.96c.5.38 1.04.7 1.63.94l.36 2.54c.05.24.25.42.5.42h3.84c.25 0 .45-.18.5-.42l.36-2.54c.59-.24 1.13-.56 1.63-.94l2.39.96c.22.08.47 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg>
+                            Settings
                         </div>
                     </div>
                 </div>
@@ -161,11 +171,6 @@
                     </div>
                     <div class="online-strip-list" id="online-strip-list"></div>
                     <p class="online-strip-empty" id="online-strip-empty">No users online</p>
-                </div>
-
-                <div id="map-container" class="hidden">
-                    <div id="live-radar-map"></div>
-                    <button class="map-close-btn" onclick="toggleRadarMap()">Close Map</button>
                 </div>
 
                 <div id="chat-list-container">
@@ -226,9 +231,20 @@
 
                 <div id="radar-body">
 
+                <!-- WI-FI DIRECT only. Phones found on the Bluetooth radio have
+                     their own panel now, so each transport lists exactly the
+                     devices it can actually reach — never a mixed list. -->
+                <div class="reach-section">
+                    <div class="reach-head">
+                        <span class="reach-title">Wi-Fi Direct phones</span>
+                        <span class="nearby-count" id="wifi-peer-count">0</span>
+                    </div>
+                    <div id="wifi-peer-list" class="reach-list"></div>
+                </div>
+
                 <!-- The reachable-ghosts list moved to its own Online screen
-                     (nav item 3) so the WiFi panel is purely the pairing place:
-                     radar toggle, QR show/scan, offline handshake. -->
+                     (header menu → Nearby Ghosts) so the WiFi panel is purely the
+                     pairing place: radar toggle, QR show/scan, offline handshake. -->
                 <div id="offline-flow-wrap" class="hidden">
                 <div style="padding:0 16px 16px;">
                     <p class="sub" style="text-align:center;margin-bottom:14px;">Works on the same WiFi/hotspot — no internet required. One device shows its QR, the other scans it.</p>
@@ -281,6 +297,48 @@
                 </div>
             </div>
 
+            <!-- TAB 3: BLUETOOTH — the same job as Wi-Fi, over BLE.
+                 Bluetooth is how the two phones FIND each other (no internet, no
+                 hotspot, no QR); tapping Connect opens the direct, encrypted link.
+                 Only BLE-discovered phones are listed here — Wi-Fi Direct peers
+                 stay in the WiFi panel, and the Chats tab shows everybody. -->
+            <div class="main-tab-panel" id="main-tab-panel-2">
+                <div class="radar-header">
+                    <div class="radar-toggle-row">
+                        <span id="bt-toggle-label" class="radar-toggle-label radar-on-color">On</span>
+                        <label class="radar-switch">
+                            <input type="checkbox" id="bt-scan-toggle" checked onchange="gmSetBluetoothScan(this.checked)" aria-label="Bluetooth discovery">
+                            <span class="radar-slider"></span>
+                        </label>
+                    </div>
+                    <div class="radar-header-icons">
+                        <button class="radar-icon-btn" title="Refresh Bluetooth phones" aria-label="Refresh Bluetooth phones" onclick="gmRefreshBluetoothPeers()">
+                            <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="bt-hero">
+                    <span class="bt-hero-badge" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="26" height="26"><path d="M17.71 7.71 12 2h-1v7.59L6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 11 14.41V22h1l5.71-5.71-4.3-4.29 4.3-4.29zM13 5.83l1.88 1.88L13 9.59V5.83zm1.88 10.46L13 18.17v-3.76l1.88 1.88z"/></svg>
+                    </span>
+                    <div class="bt-hero-text">
+                        <h3>Bluetooth</h3>
+                        <p class="sub" id="bt-status-line">Looking for Ghost Mesh phones near you…</p>
+                    </div>
+                </div>
+
+                <div class="reach-section">
+                    <div class="reach-head">
+                        <span class="reach-title">Phones near you</span>
+                        <span class="nearby-count" id="bt-peer-count">0</span>
+                    </div>
+                    <div id="bt-peer-list" class="reach-list"></div>
+                </div>
+
+                <p class="bt-note">Bluetooth finds the other phone without internet, a hotspot or a QR code. The chat link then opens directly between the two devices (Wi-Fi Direct, or the same hotspot) — nothing goes through a server.</p>
+            </div>
+
         </div>
     </div>
 
@@ -302,13 +360,18 @@
         <svg viewBox="0 0 24 24" fill="currentColor" width="21" height="21"><path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/></svg>
         <span class="gm-nav-label">WiFi</span>
     </button>
-    <button class="gm-nav-item" data-nav="online" onclick="gmNavGo('online')" aria-label="Online Ghosts">
-        <svg viewBox="0 0 24 24" fill="currentColor" width="21" height="21"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-        <span class="gm-nav-label">Online</span>
+    <!-- Bluetooth takes the slot "Online" used to hold: it is a real transport
+         (BLE discovery → direct link), not just a list. The reachable-ghosts
+         list itself still opens from the header menu ("Nearby Ghosts"). -->
+    <button class="gm-nav-item" data-nav="bluetooth" onclick="gmNavGo('bluetooth')" aria-label="Bluetooth">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="21" height="21"><path d="M17.71 7.71 12 2h-1v7.59L6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 11 14.41V22h1l5.71-5.71-4.3-4.29 4.3-4.29zM13 5.83l1.88 1.88L13 9.59V5.83zm1.88 10.46L13 18.17v-3.76l1.88 1.88z"/></svg>
+        <span class="gm-nav-label">Bluetooth</span>
     </button>
-    <button class="gm-nav-item" data-nav="settings" onclick="gmNavGo('settings')" aria-label="Settings" aria-haspopup="dialog">
-        <svg viewBox="0 0 24 24" fill="currentColor" width="21" height="21"><path d="M19.14 12.94a7.1 7.1 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.3 7.3 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.1 7.1 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.22.39.3.6.22l2.39-.96c.5.38 1.04.7 1.63.94l.36 2.54c.05.24.25.42.5.42h3.84c.25 0 .45-.18.5-.42l.36-2.54c.59-.24 1.13-.56 1.63-.94l2.39.96c.22.08.47 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg>
-        <span class="gm-nav-label">Settings</span>
+    <!-- Settings moved into the header 3-dot menu (the gear sat in the nav while
+         it only ever opened a sheet). Its old slot is the full-screen map. -->
+    <button class="gm-nav-item" data-nav="map" onclick="gmNavGo('map')" aria-label="Live map">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="21" height="21"><path d="M20.5 3l-.16.03L15 5.1 9 3 3.36 4.9c-.21.07-.36.25-.36.48V20.5c0 .28.22.5.5.5l.16-.03L9 18.9l6 2.1 5.64-1.9c.21-.07.36-.25.36-.48V3.5c0-.28-.22-.5-.5-.5zM15 19l-6-2.11V5l6 2.11V19z"/></svg>
+        <span class="gm-nav-label">Map</span>
     </button>
 </nav>
 
@@ -470,6 +533,47 @@
         </div>
     </div>
 
+    <!-- LIVE MAP — a full-screen destination of its own (bottom nav → Map).
+         Leaflet is lazy-loaded the first time it opens, and only real positions
+         are plotted: your own fix, plus pins from location cards people chose
+         to share with you. Nothing here is simulated. -->
+    <div id="map-screen" class="app-screen hidden">
+        <div class="live-map-wrap">
+            <div id="live-radar-map"></div>
+
+            <div class="live-map-top">
+                <button class="live-map-round-btn" onclick="closeLiveMap()" aria-label="Back to chats">
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                </button>
+                <div class="live-map-title">
+                    <h3>Live Map</h3>
+                    <span id="map-status-line">Finding your location…</span>
+                </div>
+                <button class="live-map-round-btn" onclick="gmMapRecenter()" aria-label="Centre the map on me">
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm8.94 3A8.99 8.99 0 0 0 13 3.06V1h-2v2.06A8.99 8.99 0 0 0 3.06 11H1v2h2.06A8.99 8.99 0 0 0 11 20.94V23h2v-2.06A8.99 8.99 0 0 0 20.94 13H23v-2h-2.06zM12 19a7 7 0 1 1 0-14 7 7 0 0 1 0 14z"/></svg>
+                </button>
+            </div>
+
+            <div class="live-map-panel">
+                <div class="live-map-row">
+                    <span class="live-map-dot you" aria-hidden="true"></span>
+                    <span class="live-map-row-text">You</span>
+                    <span class="live-map-row-value" id="map-my-coords">—</span>
+                </div>
+                <div class="live-map-row">
+                    <span class="live-map-dot peer" aria-hidden="true"></span>
+                    <span class="live-map-row-text">Shared locations</span>
+                    <span class="live-map-row-value" id="map-peer-count">0</span>
+                </div>
+                <div class="live-map-actions">
+                    <button class="credits-earn-btn" onclick="gmMapLocateMe()">Use my location</button>
+                    <button class="credits-earn-btn" onclick="openOnlineUsers()">Nearby Ghosts</button>
+                </div>
+                <p class="live-map-note">Location is off until you allow it. Pins appear only for people who chose to share their position with you — there is no server tracking anyone.</p>
+            </div>
+        </div>
+    </div>
+
     <!-- PROFILE SCREEN — Instagram-style layout on a true-black canvas:
          gradient-ring avatar, name + Ghost ID chip, a stats row, then the
          editable details and credits. Reached from Settings (or the header
@@ -515,14 +619,17 @@
                 <span id="profile-premium-label">Premium</span>
             </button>
             <div class="profile-info-box">
+                <!-- Both fields are editable right here: type, then tap Save.
+                     The phone stays device-only and is never part of the Ghost ID. -->
                 <div class="profile-field">
-                    <label>Display Name</label>
+                    <label for="profile-name-input">Display Name</label>
                     <input type="text" id="profile-name-input" class="profile-input" placeholder="Your name" oninput="gmProfileNameDirty()">
                     <button class="save-btn hidden" id="profile-save-btn" onclick="saveDisplayName()">Save</button>
                 </div>
                 <div class="profile-field">
-                    <label>Phone</label>
-                    <div class="field-value" id="profile-phone">—</div>
+                    <label for="profile-phone-input">Phone <span class="optional">(optional — never used for your ID)</span></label>
+                    <input type="tel" id="profile-phone-input" class="profile-input" placeholder="Add or change your number" oninput="gmProfilePhoneDirty()">
+                    <button class="save-btn hidden" id="profile-phone-save-btn" onclick="saveProfilePhone()">Save</button>
                 </div>
                 <div class="profile-field">
                     <label>Status</label>
@@ -552,7 +659,7 @@
                         Premium
                     </button>
                     <div class="credits-mini-actions">
-                        <button class="credits-earn-btn credits-earn-icon" title="Daily bonus — earn +5" aria-label="Claim the daily bonus for 5 credits" onclick="claimDailyBonus()">
+                        <button class="credits-earn-btn credits-earn-icon" title="Daily bonus — earn +2" aria-label="Claim the daily bonus for 2 credits" onclick="claimDailyBonus()">
                             <svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><path d="M8 5v14l11-7z"/></svg>
                         </button>
                         <button class="credits-earn-btn credits-earn-icon" title="Share the app — earn +5" aria-label="Share the app for 5 credits" onclick="shareAppForCredits()">
@@ -589,7 +696,7 @@
             <div class="settings-list">
                 <button class="settings-row" onclick="gmOpenProfileFromSettings()">
                     <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>
-                    <span class="settings-row-text"><span class="settings-row-title">My Profile</span><span class="settings-row-sub">Name, Ghost ID, status, recovery phrase</span></span>
+                    <span class="settings-row-text"><span class="settings-row-title">My Profile</span><span class="settings-row-sub">Edit name and phone · Ghost ID · status · recovery phrase</span></span>
                 </button>
                 <button class="settings-row" onclick="closeSettingsSheet();gmOpenGhostAssistant()">
                     <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>
@@ -621,7 +728,7 @@
                 </button>
                 <button class="settings-row" onclick="closeSettingsSheet();claimDailyBonus()">
                     <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 2l2.9 6.6 7.1.6-5.4 4.7 1.6 7-6.2-3.7L5.8 21l1.6-7L2 9.2l7.1-.6L12 2z"/></svg>
-                    <span class="settings-row-text"><span class="settings-row-title">Claim Daily Bonus</span><span class="settings-row-sub">Earn 5 credits every 24 hours</span></span>
+                    <span class="settings-row-text"><span class="settings-row-title">Claim Daily Bonus</span><span class="settings-row-sub">Earn 2 credits every 24 hours · <span id="settings-bonus-state" class="settings-row-state"></span></span></span>
                 </button>
                 <button class="settings-row" onclick="closeSettingsSheet();shareAppForCredits()">
                     <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L7.04 9.81C6.5 9.31 5.79 9 5 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/></svg>
@@ -722,6 +829,47 @@
         </div>
     </div>
 
+    <!-- PROFILE PHOTO — adjust before saving, like a messenger does: drag to
+         move, slider/pinch to zoom, circular preview, square 512px result. -->
+    <div id="dp-crop-modal" class="modal-overlay hidden" role="dialog" aria-label="Adjust your profile photo" onclick="if(event.target===this)gmDpCropCancel()">
+        <div class="modal-box dp-crop-box">
+            <h4>Adjust your photo</h4>
+            <p class="sub">Drag to move it, pinch or use the slider to zoom — what you see in the circle is what gets saved.</p>
+            <div class="dp-crop-viewport" id="dp-crop-viewport">
+                <div class="dp-crop-image" id="dp-crop-image"></div>
+                <span class="dp-crop-ring" aria-hidden="true"></span>
+            </div>
+            <label class="dp-crop-zoom-label" for="dp-crop-zoom">Zoom</label>
+            <input type="range" id="dp-crop-zoom" class="dp-crop-zoom" min="1" max="4" step="0.01" value="1" oninput="gmDpCropZoom(this.value)">
+            <div class="modal-actions">
+                <button class="cancel-btn" onclick="gmDpCropCancel()">Cancel</button>
+                <button class="confirm-btn" id="dp-crop-save" onclick="gmDpCropApply()">Use photo</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SPONSOR BREAK — the app's only ad surface. It opens when the person taps
+         "Earn Credits" in the header 3-dot menu (rewarded: +2 credits) and when
+         a theme is changed. Nothing else in the app shows an ad, and a real ad
+         network is used as soon as one is configured (see gmAdNetwork()). -->
+    <div id="gm-ad-screen" class="gm-ad-screen hidden" role="dialog" aria-label="Sponsored break">
+        <div class="gm-ad-card">
+            <div class="gm-ad-head">
+                <span class="gm-ad-tag" id="gm-ad-tag">Sponsored</span>
+                <button class="gm-ad-close" id="gm-ad-close" onclick="gmCloseSponsoredBreak()" aria-label="Close the sponsored break">
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                </button>
+            </div>
+            <h4 id="gm-ad-title">A short word from our sponsor</h4>
+            <div id="gm-ad-slot" class="gm-ad-slot"></div>
+            <div class="gm-ad-progress"><div id="gm-ad-progress-fill" class="gm-ad-progress-fill"></div></div>
+            <p class="gm-ad-timer" id="gm-ad-timer"></p>
+            <button class="primary-btn hidden" id="gm-ad-claim" onclick="gmClaimSponsoredCredits()">Claim +2 credits</button>
+            <button class="cancel-btn hidden" id="gm-ad-continue" onclick="gmCloseSponsoredBreak()">Continue</button>
+            <p class="gm-ad-note" id="gm-ad-note"></p>
+        </div>
+    </div>
+
     <!-- PASTE PAIRING CODE — replaces window.prompt() for the same reason -->
     <div id="gm-paste-modal" class="modal-overlay hidden" role="dialog" aria-label="Paste pairing code" onclick="if(event.target===this)gmClosePasteModal()">
         <div class="modal-box">
@@ -745,7 +893,7 @@
             <p class="sub" style="text-align:center;" id="not-enough-credits-msg">You need more credits for this.</p>
             <button class="primary-btn" onclick="claimDailyBonus();closeNotEnoughCreditsModal()">
                 <svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><path d="M12 2l2.9 6.6 7.1.6-5.4 4.7 1.6 7-6.2-3.7L5.8 21l1.6-7L2 9.2l7.1-.6L12 2z"/></svg>
-                Daily Bonus — Earn +5 Credits
+                Daily Bonus — Earn +2 Credits
             </button>
             <button class="credits-earn-btn" style="width:100%;margin-top:8px;" onclick="shareAppForCredits();closeNotEnoughCreditsModal()">
                 Share App — Earn +5 Credits
@@ -835,7 +983,7 @@
                 <div class="credits-earn-row">
                     <button class="credits-earn-btn" id="bonus-earn-btn" onclick="claimDailyBonus()">
                         <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 2l2.9 6.6 7.1.6-5.4 4.7 1.6 7-6.2-3.7L5.8 21l1.6-7L2 9.2l7.1-.6L12 2z"/></svg>
-                        <span id="bonus-earn-label">Daily Bonus (+5)</span>
+                        <span id="bonus-earn-label">Daily Bonus (+2)</span>
                     </button>
                     <button class="credits-earn-btn" onclick="shareAppForCredits()">
                         <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L7.04 9.81C6.5 9.31 5.79 9 5 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/></svg>

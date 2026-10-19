@@ -161,8 +161,11 @@ for (const k of navKeys) {
     if (!navBlock.includes("gmNavGo('" + k + "')")) polishProblems.push("nav item '" + k + "' is not wired to gmNavGo");
     if (!defined.has("gmNavGo")) polishProblems.push("gmNavGo is not defined");
 }
-if (navKeys.join(",") !== "chats,wifi,online,settings") polishProblems.push("pill nav is not Chats/WiFi/Online/Settings (" + navKeys.join(",") + ")");
+// Chats / WiFi / Bluetooth / Map. Settings moved into the header 3-dot menu
+// (it only ever opened a sheet) and its old slot is the full-screen map.
+if (navKeys.join(",") !== "chats,wifi,bluetooth,map") polishProblems.push("pill nav is not Chats/WiFi/Bluetooth/Map (" + navKeys.join(",") + ")");
 if (navKeys.includes("profile")) polishProblems.push("Profile is back as a pill nav destination");
+if (navKeys.includes("settings")) polishProblems.push("Settings is back in the pill nav instead of the 3-dot menu");
 // The reachable-ghosts list has one home: the Online screen.
 if (/id="wifi-reach-list"|id="wifi-reach-count"/.test(html)) polishProblems.push("the reach list is still inside the WiFi panel");
 for (const id of ["online-screen", "online-reach-list", "online-reach-count"]) {
@@ -173,8 +176,8 @@ for (const fn of ["gmNavGo", "gmSyncBottomNav", "gmSetBottomNavActive", "gmMoveN
     if (!defined.has(fn)) polishProblems.push(fn + "() is missing");
 }
 // gmSyncBottomNav must gate the nav to the screens that should show it.
-if (!/GM_NAV_SCREENS\s*=\s*\{[^}]*"chatlist-screen"\s*:\s*true[^}]*"online-screen"\s*:\s*true/.test(js)) {
-    polishProblems.push("GM_NAV_SCREENS does not cover chatlist-screen + online-screen");
+if (!/GM_NAV_SCREENS\s*=\s*\{[^}]*"chatlist-screen"\s*:\s*true[^}]*"map-screen"\s*:\s*true/.test(js)) {
+    polishProblems.push("GM_NAV_SCREENS does not cover chatlist-screen + map-screen");
 }
 // Scroll snapping must stay off: a browser snap point is what made a fast flick
 // skip every panel and land on the last one.
@@ -191,8 +194,22 @@ if (!css.includes(".gm-screen-push") || !css.includes(".gm-screen-fade")) polish
 // keep the active-panel state the nav/swipe/tests all read.
 if (/class="main-tab-btn/.test(html)) polishProblems.push("the redundant top tab bar is back in index.html");
 if (/main-tab-btn|main-tab-indicator|main-tabs-bar/.test(css)) polishProblems.push("dead top-tab-bar CSS is still in style.css");
-for (const id of ["main-tabs-scroller", "main-tab-panel-0", "main-tab-panel-1"]) {
+for (const id of ["main-tabs-scroller", "main-tab-panel-0", "main-tab-panel-1", "main-tab-panel-2"]) {
     if (!htmlIds.has(id)) polishProblems.push("missing " + id);
+}
+// Three panels behind four nav items: the map is a screen, not a swipe panel.
+if (!/const GM_TABS\s*=\s*\["Chats",\s*"WiFi",\s*"Bluetooth"\]/.test(js)) {
+    polishProblems.push("GM_TABS is not Chats/WiFi/Bluetooth");
+}
+// Each transport panel keeps its own list (no mixed list) and the Map is the
+// full-screen screen the nav points at.
+for (const id of ["bt-peer-list", "bt-peer-count", "wifi-peer-list", "wifi-peer-count",
+    "map-screen", "live-radar-map", "map-status-line"]) {
+    if (!htmlIds.has(id)) polishProblems.push("missing " + id);
+}
+if (/id="map-container"/.test(html)) polishProblems.push("the old inline map container is back");
+if (html.includes('id="map-screen"') && !/GM_NAV_SCREENS[^}]*map-screen/.test(js)) {
+    polishProblems.push("map-screen is not covered by GM_NAV_SCREENS");
 }
 if (!/dataset\.activeTab\s*=/.test(js)) polishProblems.push("setActiveMainTab does not record the active panel");
 check("bottom pill nav + transitions are wired across files", polishProblems);
@@ -218,6 +235,8 @@ const movedFeatures = [
     { label: "Send Feedback", menu: "openFeedbackModal(", settings: "openFeedbackModal(" },
     { label: "Logout", menu: "logoutApp(", settings: "logoutApp(" }
 ];
+// Settings itself left the nav for the 3-dot menu.
+if (!menuHtml.includes("openSettingsSheet(")) settingsProblems.push("Settings is not reachable from the 3-dot menu");
 for (const f of movedFeatures) {
     if (menuHtml.includes(f.menu)) settingsProblems.push(f.label + " is back in the header 3-dot menu");
     if (!sheetHtml.includes(f.settings)) settingsProblems.push(f.label + " is missing from the Settings sheet");
@@ -361,6 +380,35 @@ if (!/Report Abuse/.test(html) || !/Report & block/.test(scriptSource)) {
 if (!/privacy\.html/.test(read("service-worker.js"))) safetyProblems.push("privacy.html is not precached");
 if (!/phrase-backup-veil/.test(html)) safetyProblems.push("the recovery phrase is not hidden by default");
 check("privacy, safety and PIN hardening are wired", safetyProblems);
+
+// ----------------------------- 13. Bluetooth tab, live map, credits and photos
+// The transport panels, the full-screen map, editable profile fields, the one
+// sponsor surface and the photo adjuster all have to line up across files too.
+const extrasProblems = [];
+for (const fn of ["gmSetBluetoothScan", "gmRefreshBluetoothPeers", "gmPeersByTransport", "gmConnectNativePeer",
+    "openLiveMap", "closeLiveMap", "gmMapLocateMe", "gmSyncMapPins", "gmRememberPeerLocation",
+    "saveProfilePhone", "gmProfilePhoneDirty", "gmOpenSponsoredBreak", "gmClaimSponsoredCredits",
+    "gmCloseSponsoredBreak", "gmThemeSponsorBreak", "gmDpCropOpen", "gmDpCropApply", "gmDpCropZoom"]) {
+    if (!defined.has(fn)) extrasProblems.push(fn + "() is missing");
+}
+for (const id of ["profile-phone-input", "profile-phone-save-btn", "gm-ad-screen", "gm-ad-slot",
+    "gm-ad-claim", "dp-crop-modal", "dp-crop-viewport", "dp-crop-image", "bt-scan-toggle"]) {
+    if (!htmlIds.has(id)) extrasProblems.push("missing #" + id);
+}
+if (!/const BONUS_AMOUNT = 2;/.test(scriptSource)) extrasProblems.push("the daily bonus is not 2 credits");
+if (/BONUS_AMOUNT = 5;/.test(scriptSource)) extrasProblems.push("the daily bonus is back to 5 credits");
+if (/watchAdForCredits|quickAddCredit/.test(scriptSource)) {
+    extrasProblems.push("a fake ad/credit shortcut is back");
+}
+// The rewarded entry is inside the header 3-dot menu, not on a main screen.
+if (!/Earn Credits[^<]*Sponsor/.test(menuHtml)) extrasProblems.push("the Earn Credits item is missing from the 3-dot menu");
+// Bluetooth and Wi-Fi Direct must not share a peer list.
+if (!/gmPeersByTransport\("ble"\)/.test(scriptSource) || !/gmPeersByTransport\("wifi-direct"\)/.test(scriptSource)) {
+    extrasProblems.push("the WiFi / Bluetooth panels do not filter by transport");
+}
+// The map has to be a real screen with its own container, not the old strip.
+if (!/id="map-screen"[^>]*class="app-screen/.test(html)) extrasProblems.push("the map is not an app screen");
+check("Bluetooth tab, live map, editable profile and sponsor surface are wired", extrasProblems);
 
 // ---------------------------------------------------------------- report
 const failed = results.filter(r => r.problems.length);

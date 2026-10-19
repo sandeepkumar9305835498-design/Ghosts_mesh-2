@@ -26,12 +26,16 @@ rest are listed with the reason they are still open.
 | Pointer states | only 6 `:hover` rules in 2,300 lines of CSS | `@media (hover:hover)` block for primary/secondary/settings/plan/nav controls |
 | Decorative image | empty-state icon had no `alt` | `alt=""` |
 | Startup weight (Android) | `three.min.js` 603 KB + `jsQR.js` 257 KB + `leaflet.js` 148 KB + `qrcode.min.js` 20 KB were parsed on **every** launch | lazy-loaded by `gmEnsureLib()` on first use; jsQR is warmed after first paint. Static check keeps the tags out of `index.html` and every load site honest |
-| Map / privacy | a hidden Leaflet map was built at login and fetched OpenStreetMap tiles (IP + approximate area) before the user opened anything | built only when the map is opened |
+| Map / privacy | a hidden Leaflet map was built at login and fetched OpenStreetMap tiles (IP + approximate area) before the user opened anything | built only when the map is opened — and it is a full-screen destination now (bottom nav → **Map**), with no location read until "Use my location" is tapped |
 | WebGL fallback | a WebGL-less WebView threw inside an async theme switch (looked frozen) | checked up front, falls back to the default theme with a message |
 | Reply QR | could report "QR data too large" when the library simply had not loaded yet | `renderOfflineQR()` loads its own library |
 | Status bar | `theme-color` was hard-coded purple for all 7 themes | follows the active theme (a static check ties it to each CSS `--accent`) |
-| Duplicate navigation | Chats / WiFi were reachable twice — from the top tab bar **and** the bottom pill nav | top tab bar removed at the user's request; the pill nav is the single switcher, the two panels and the swipe gesture stay, and `#main-tabs-scroller[data-active-tab]` carries the state |
-| Nav destinations | pill nav was Chats / WiFi / Profile / Settings, and the reachable-ghosts list sat inside the WiFi panel | pill nav is **Chats / WiFi / Online / Settings**: Profile moved into Settings (where the rest of the account items already lived), and its slot became **Online** — the single home of the reachable/online ghosts list (`#online-screen`) |
+| Duplicate navigation | Chats / WiFi were reachable twice — from the top tab bar **and** the bottom pill nav | top tab bar removed at the user's request; the pill nav is the single switcher, the panels and the swipe gesture stay (three of them now: Chats / WiFi / Bluetooth), and `#main-tabs-scroller[data-active-tab]` carries the state |
+| Bluetooth tab | Bluetooth existed only as a tag inside one mixed peer list, so there was no place to see (or start) a Bluetooth pairing | each radio owns its list via `gmPeersByTransport()`: the **Bluetooth** panel shows BLE phones with their own toggle/refresh, the **WiFi** panel shows Wi-Fi Direct phones, and the Chats strip still lists every transport. Tapping Connect on a BLE phone explains that the chat link opens over the shared hotspot and drops the user on the WiFi tab's QR handshake, instead of firing a Wi-Fi Direct join at a BLE address |
+| Profile editing | the name was editable but the phone number was display-only — "there is no way to edit it" | both are inputs with their own Save button, stored device-only (never part of the Ghost ID); Settings → My Profile says so |
+| Profile photo | a picked photo was saved as-is, so tall pictures were cropped blind by CSS and the face could land outside the circle | a drag-and-zoom adjuster (`#dp-crop-modal`, pinch or slider) previews the exact circle and saves a 512 px square JPEG |
+| Daily bonus | one tap paid 5 credits, which made the credit economy nearly free | `BONUS_AMOUNT = 2`; the bigger earn is the sponsor break, which is a real view with a daily cap |
+| Nav destinations | pill nav was Chats / WiFi / Profile / Settings, and the reachable-ghosts list sat inside the WiFi panel | pill nav is **Chats / WiFi / Bluetooth / Map**: Profile lives in Settings, Settings itself moved into the header 3-dot menu (it only ever opened a sheet), and its old slot is the full-screen map. **Bluetooth** replaced Online as a real transport panel (BLE-discovered phones only), while the every-transport list (`#online-screen`) opens from the header menu's "Nearby Ghosts" |
 
 Files touched: `index.html`, `style.css`, `script.js`,
 `scripts/verify-static.mjs`, `scripts/run-runtime-checks.mjs`.
@@ -40,24 +44,27 @@ Files touched: `index.html`, `style.css`, `script.js`,
 
 ## 2. A. UI/UX
 
-**Home / hierarchy** — Chats tab = search, chat list, one empty state; WiFi tab =
-radar toggle, two small icon actions, the single reachable-peer list, the offline
-QR flow; Profile = identity, one compact credits row, backup/logout. Settings is a
-sheet with three real rows (feedback, daily bonus, referral) and no "coming soon"
-text. *The duplicate "Online Nearby" block was removed in an earlier pass and a
-runtime check keeps it out.*
+**Home / hierarchy** — Chats tab = search, online-now strip (every transport: internet,
+Bluetooth, Wi-Fi Direct), chat list, one empty state; WiFi tab = radar toggle, two
+small icon actions, the Wi-Fi Direct phones that radio found, the offline QR flow;
+Bluetooth tab = the same shape over BLE (toggle, refresh, phones near you); Map =
+a full-screen Leaflet surface; Profile = identity, editable name **and phone**, one
+compact credits row, backup/logout. Settings is a sheet with real rows (feedback,
+daily bonus, referral) and no "coming soon" text. *The duplicate "Online Nearby"
+block was removed in an earlier pass and a runtime check keeps it out.*
 
-**Navigation** — one switcher: the bottom floating pill (Chats / WiFi / Online /
-Settings), hidden on screens that should not show it, reserving space via
-`--gm-nav-h`. The top tab bar was removed because it duplicated two of those
-destinations; the two panels still sit side by side and still respond to the
-horizontal swipe, and `setActiveMainTab()` keeps the nav highlight and the
-scroller's `data-active-tab` in step. **Profile** is no longer a destination — it
-is the first row of the Settings sheet (the avatar and the header menu still open
-it directly), and **Online** took its slot: `#online-screen` lists every reachable
-Ghost (online over the internet, or nearby over Bluetooth / Wi-Fi Direct) with a
-Connect button per row. Panel changes: the WiFi panel is now purely the pairing
-place (radar, QR show/scan, offline handshake) because the reach list moved out.
+**Navigation** — one switcher: the bottom floating pill (Chats / WiFi / Bluetooth /
+Map), hidden on screens that should not show it, reserving space via `--gm-nav-h`.
+The top tab bar was removed because it duplicated two of those destinations; the
+three panels still sit side by side and still respond to the horizontal swipe, and
+`setActiveMainTab()` keeps the nav highlight and the scroller's `data-active-tab` in
+step. **Profile** is the first row of the Settings sheet; **Settings** itself is now
+inside the header 3-dot menu (nothing was lost — the sheet is unchanged), and its
+old nav slot is **Map**, a full-screen screen (`#map-screen`) that plots only real
+positions. **Bluetooth** took the slot Online used to hold and lists only
+BLE-discovered phones, so each radio has its own list and the Chats tab still shows
+every peer regardless of transport; the every-transport list (`#online-screen`)
+opens from the header menu's "Nearby Ghosts".
 
 **Buttons / tap targets** — icon buttons are 44×44, call controls 54×54, scanner
 buttons 48×48, chat rows ≥72 px. Comfortably above the 24 px accessibility floor.
@@ -86,22 +93,26 @@ visible `aria-current`-style marker for the active bottom-nav tab (§8 P2).
 call failures, plus a global crash guard (`safeToastOnce`). No error leaves the user
 without a message.
 
-**Empty states** — no chats, no reachable peers, no search results, no phrase-setup
+**Empty states** — no chats, no reachable peers, no Bluetooth/Wi-Fi-Direct phones, no search results, no phrase-setup
 skip. Consistent shape and copy.
 
 **Confirmation dialogs** — `gmConfirm()` is the themed in-app replacement for
-`window.confirm`; used for the 7 destructive actions (logout, clear chat, clear all,
-block, leave group, delete-for-everyone, disconnect). No native `alert`/`confirm`/
-`prompt` remains in the code.
+`window.confirm`; used for the destructive actions (logout, clear chat, clear all,
+block, leave group, delete-for-everyone, disconnect) plus the two opt-ins (live
+location, opening a chat link to a Bluetooth-discovered phone). No native
+`alert`/`confirm`/`prompt` remains in the code.
 
 ---
 
 ## 3. B. User flow
 
-Real flow today: **first launch** → name (optional) → *mandatory* 12-word recovery
-phrase + 2–3 word confirmation (no skip) → Chats. **Pairing** has two real paths:
-(1) WiFi tab → show QR / scan QR (reply-QR handshake, no internet), (2) internet →
-Ghost ID via the PeerJS broker. **Chat → calls → files** all exist; groups require
+Real flow today: **first launch** → name (optional) → 12-word recovery phrase with
+confirmation **or "Skip for now"** (the words stay in Profile → Recovery Phrase) →
+Chats → the bottom nav's Chats / WiFi / Bluetooth panels plus the full-screen Map.
+**Pairing** has three real paths: (1) WiFi tab → show QR / scan QR (reply-QR
+handshake, no internet), (2) internet → Ghost ID via the PeerJS broker, (3)
+Bluetooth tab → BLE finds the phone nearby, then the chat link opens over Wi-Fi
+Direct or the shared hotspot. **Chat → calls → files** all exist; groups require
 every member to stay directly connected (stated in the dialog). **Disconnect** lives
 in the chat menu.
 
@@ -129,10 +140,11 @@ Dead ends / friction found:
 | Offline QR / same-Wi-Fi data channel | **REAL, no server** | `new RTCPeerConnection({iceServers: []})` + `createDataChannel("gm-offline")`; SDP exchanged through the QR codes |
 | Online pair-by-Ghost-ID | **REAL, but brokered** | `new Peer(id, {host:"0.peerjs.com"})` — a public WebRTC signalling broker; message payloads go peer-to-peer over DTLS |
 | Local discovery (BLE + Wi-Fi Direct) | **REAL, Android-only** | `BleMeshDiscovery.java`, `WifiDirectMesh.java`, `GhostMeshService.java` foreground service; results land in the same reach list via `window.gmApplyNativePeers` |
-| Radar map | **REAL, internet-dependent** | Leaflet + OpenStreetMap tiles (`tile.openstreetmap.org`) + geolocation |
+| Live Map | **REAL, internet-dependent** | Leaflet + OpenStreetMap tiles (`tile.openstreetmap.org`); your own fix only after "Use my location", plus pins from location cards people chose to share — no simulated positions |
 | Groups | **REAL, constrained** | fan-out over existing direct connections; no relay |
 | Calls (voice/video) | **REAL** | WebRTC over the same connection; needs the mic/camera permission |
 | Credits / Premium | **MOCK** | local counters in `safeStorage`; `PREMIUM_PLANS` is a table for a future Play Billing integration |
+| Sponsor break (ad surface) | **REAL slot, house advert by default** | `#gm-ad-screen` + `gm-ad-slot`; `gmAdNetwork()` serves Google AdSense when `gm-ad-network`/`gm-ad-client`/`gm-ad-slot` meta tags are set, a custom URL slot for `gm-ad-html-url`, and otherwise the app's own Premium advert labelled "House ad". It opens from the 3-dot menu (rewarded, +2) and on a theme change — nowhere else. Daily cap: 10 views |
 | Notifications | **UNAVAILABLE in WebView** | `new Notification()` is not implemented by Android WebView; the app guards it and falls back to in-app banners + vibration |
 
 ---
@@ -147,6 +159,7 @@ Dead ends / friction found:
 | Chat storage at rest | Messages, contacts and profile are still stored **in plaintext in localStorage** until cleared | Encrypt local storage with a key derived from the seed — largest remaining privacy gap |
 | Recovery phrase | Genuinely local: random seed → Ghost ID + BIP-39 words, verified locally with a checksum; nothing is transmitted | — (this one holds up) |
 | Logs / analytics / tracking | None: no analytics, no telemetry, the only `fetch` in `script.js` is the PeerJS id-list utility | — |
+| Ads | One ad surface (`#gm-ad-screen`), shown from the 3-dot menu and on a theme change only. With no ad-network meta tag configured it serves the app's own house advert — no third-party script, no ad tracker. Adding `gm-ad-network="adsense"` + client/slot tags swaps in AdSense, or `gm-ad-html-url` a sandboxed custom slot | Decide the network (if any) and add the tags — the rewarded flow, the 15s gate and the daily cap already work |
 | Permissions | Declared in `AndroidManifest.xml` and requested at first use; location is needed for BLE/Wi-Fi Direct discovery on Android ≤12 | — |
 
 ---

@@ -82,12 +82,15 @@ itself:
 | `GhostNativeBridge.java` | The `window.GhostNative` object the page calls: `isSupported`, `setGhostId`, `setDisplayName`, `startDiscovery`, `stopDiscovery`, `getPeers`, `connect`. |
 
 Discovered peers are pushed into the page (`window.gmApplyNativePeers([...])`)
-and rendered by the *same* function as PeerJS peers, so they appear in
-WiFi → **Ghosts You Can Reach** (the web app's single reachable-peer list),
-labelled `Bluetooth` / `Wi-Fi Direct`, each with a **Connect** button. Nothing about the
-existing chat/call path changes: BLE only finds devices and carries the Ghost
-ID, Wi-Fi Direct supplies the direct link, and the WebRTC/QR handshake still
-does the talking.
+and rendered by the *same* function as PeerJS peers, but each radio now has its
+own panel: BLE discoveries land in the bottom nav's **Bluetooth** tab
+(`#bt-peer-list`), Wi-Fi Direct discoveries in the **WiFi** tab's “Wi-Fi Direct
+phones” card, and the every-transport list (header menu → *Nearby Ghosts*)
+still shows all of them. Nothing about the existing chat/call path changes: BLE
+only finds devices and carries the Ghost ID, Wi-Fi Direct supplies the direct
+link, and the WebRTC/QR handshake still does the talking — which is why tapping
+**Connect** on a Bluetooth row explains the link and opens the QR handshake on
+the WiFi tab instead of handing a BLE address to `WifiP2pManager`.
 
 Permissions: `BLUETOOTH_SCAN` (with `neverForLocation`), `BLUETOOTH_ADVERTISE`,
 `BLUETOOTH_CONNECT` on Android 12+, legacy `BLUETOOTH`/`BLUETOOTH_ADMIN` below
@@ -103,11 +106,12 @@ BLE scanning and Wi-Fi Direct discovery are location-gated, which is why
    `GhostNative.startDiscovery()` asks for it).
 3. A small silent notification appears — that is the discovery service.
 4. Put the phones within a few metres: each should appear in the other's
-   **Ghosts You Can Reach** list (WiFi tab) within ~10 seconds, labelled
-   `Bluetooth`.
+   **Bluetooth** tab within ~10 seconds, and Wi-Fi Direct devices in the WiFi
+   tab's “Wi-Fi Direct phones” card.
 5. Tap **Connect** on a Wi-Fi Direct entry to form the direct link; the toast
-   reports the result. For the actual conversation, the QR/offline handshake
-   (or a normal online connection) is still what pairs the two Ghost IDs.
+   reports the result. Tapping Connect on a Bluetooth entry opens the “Chat over
+   Bluetooth” dialog, which takes both of you to the WiFi tab's QR handshake —
+   that is what actually pairs the two Ghost IDs and opens the chat.
 
 Known limits, stated plainly: BLE advertisements are capped at 31 bytes, so
 only a short Ghost ID (plus an optional short name) fits — the full identity is
