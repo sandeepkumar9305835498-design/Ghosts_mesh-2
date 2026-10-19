@@ -441,8 +441,9 @@ function updateProfileScreen() {
     document.getElementById("profile-save-btn")?.classList.add("hidden");
     const gid = document.getElementById("profile-ghost-id");
     if (gid) gid.innerText = userGhostID;
-    const ph = document.getElementById("profile-phone");
-    if (ph) ph.innerText = userPhoneNumber || "not set (optional)";
+    const ph = document.getElementById("profile-phone-input");
+    if (ph) ph.value = userPhoneNumber || "";
+    document.getElementById("profile-phone-save-btn")?.classList.add("hidden");
     const nameDisplay = document.getElementById("profile-name-display");
     if (nameDisplay) nameDisplay.innerText = userDisplayName || "Ghost";
     // Instagram-style stats row: chats on this device, credits, and the P2P
@@ -550,12 +551,16 @@ function gmScrollContainerTo(el, left) {
     el.scrollLeft = left;
 }
 
-// ===== MAIN PANELS (Chats / WiFi) =====
-// Two panels only: Chats (conversations) and WiFi (pairing + reachable ghosts).
-// The reachable-peer list lives in the WiFi panel alone — one list, one place to
-// keep correct. There is no tab bar any more: the bottom pill nav switches
-// panels (gmNavGo → scrollToMainTab) and the panels still swipe horizontally.
-const GM_TABS = ["Chats", "WiFi"];
+// ===== MAIN PANELS (Chats / WiFi / Bluetooth) =====
+// Three panels: Chats (conversations, everyone), WiFi (QR pairing + Wi-Fi Direct
+// phones) and Bluetooth (BLE phones). Each transport shows only the devices it
+// can really reach; the Chats tab still lists every peer regardless of how they
+// connected. There is no tab bar: the bottom pill nav switches panels
+// (gmNavGo → scrollToMainTab) and the panels still swipe horizontally.
+const GM_TABS = ["Chats", "WiFi", "Bluetooth"];
+// Panel index → bottom nav key, so the highlight and the visible panel cannot
+// drift apart.
+const GM_TAB_NAV_KEYS = ["chats", "wifi", "bluetooth"];
 
 function scrollToMainTab(index) {
     const scroller = document.getElementById("main-tabs-scroller");
@@ -577,7 +582,7 @@ function setActiveMainTab(index) {
     // Keep the bottom pill nav's highlight in step with the panel. This runs
     // on every scroll tick, so gmSetBottomNavActive() bails out early when the
     // answer has not changed instead of touching the DOM each time.
-    gmSetBottomNavActive(clamped === 1 ? "wifi" : "chats", true);
+    gmSetBottomNavActive(GM_TAB_NAV_KEYS[clamped] || "chats", true);
     // Discovery keeps changing while the app sits open, so the Online screen's
     // list is refreshed on every panel change instead of waiting for the next
     // discovery event (it renders into a hidden screen — cheap, and always fresh
@@ -638,7 +643,7 @@ function initMainTabsScroller() {
 // and their scroll position drives the highlight through setActiveMainTab().
 // Profile is a sub-screen reached from Settings (or the header avatar), so this
 // still includes it — the nav stays visible there.
-const GM_NAV_SCREENS = { "chatlist-screen": true, "profile-screen": true, "online-screen": true };
+const GM_NAV_SCREENS = { "chatlist-screen": true, "profile-screen": true, "map-screen": true };
 let gmNavActiveKey = "";
 let gmNavReady = false;
 
@@ -666,8 +671,8 @@ function gmSyncBottomNav(screenId) {
     gmSetBottomNavVisible(visible);
     if (!visible) return;
     // Profile keeps whatever was highlighted (it is entered from Settings, like
-    // the settings sheet itself); Online is a real destination of its own.
-    if (screenId === "online-screen") gmSetBottomNavActive("online", true);
+    // the settings sheet itself); the map is a real destination of its own.
+    if (screenId === "map-screen") gmSetBottomNavActive("map", true);
     gmMoveNavPill(true);
 }
 
@@ -719,16 +724,13 @@ function gmMoveNavPill(animate) {
 function gmNavGo(key) {
     closeAllMenus();
     if (key === "online") { openOnlineUsers(); return; }
-    // "profile" is no longer a nav item, but the key stays supported so saved
-    // shortcuts / the header menu can still route through one entry point.
+    if (key === "map") { openLiveMap(); return; }
+    // "profile" / "settings" are no longer nav items, but the keys stay
+    // supported so saved shortcuts and the header menu route through one place.
     if (key === "profile") { openProfile(); return; }
-    if (key === "settings") {
-        // A sheet, not a screen, so the highlight deliberately stays on the tab
-        // the user came from instead of parking on "Settings" behind a modal.
-        openSettingsSheet();
-        return;
-    }
-    showScreen("chatlist-screen", key === "wifi" ? 1 : 0);
+    if (key === "settings") { openSettingsSheet(); return; }
+    const panel = GM_TAB_NAV_KEYS.indexOf(key);
+    showScreen("chatlist-screen", panel <= 0 ? 0 : panel);
 }
 
 // Profile and Chat Themes are entered from the Settings sheet now, so their
@@ -851,6 +853,23 @@ function saveDisplayName() {
     showToast("Name saved!");
 }
 
+// Phone is editable from the same place as the name. It is stored only on this
+// device and is never part of the Ghost ID, so changing it cannot break the
+// identity or a recovery phrase.
+function gmProfilePhoneDirty() {
+    document.getElementById("profile-phone-save-btn")?.classList.remove("hidden");
+}
+function saveProfilePhone() {
+    const el = document.getElementById("profile-phone-input");
+    const raw = el ? el.value.trim() : "";
+    if (raw && raw.replace(/\D/g, "").length < 6) { showToast("That phone number looks incomplete"); return; }
+    userPhoneNumber = raw;
+    if (raw) safeStorage.set("gm_phone", raw); else safeStorage.del("gm_phone");
+    if (el) el.value = raw;
+    document.getElementById("profile-phone-save-btn")?.classList.add("hidden");
+    showToast(raw ? "Phone number saved!" : "Phone number removed");
+}
+
 function saveStatus() {
     const s = document.getElementById("profile-status").value;
     broadcastToMesh({ type: "status-update", sender: userGhostID, status: s });
@@ -895,18 +914,184 @@ function focusProfileName() {
     try { el.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (e) { try { el.scrollIntoView(); } catch (e2) {} }
 }
 
+// ===== PROFILE PHOTO: adjust before saving (drag + pinch/zoom) =====
+// A picked photo used to be saved exactly as the camera produced it, so tall
+// pictures were centre-cropped by CSS and the face could land outside the
+// circle. It now opens a square/round preview where the person drags the photo,
+// zooms with a slider or a pinch, and only the framing they chose is saved
+// (512px square JPEG) — the same idea as a messenger's photo editor.
+let gmDpCrop = null;      // { src, w, h, zoom, ox, oy }
+let gmDpCropDrag = null;
+const GM_DP_CROP_OUTPUT = 512;
+
 function handleDPChange(event) {
-    const file = event.target.files[0]; if (!file) return;
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    event.target.value = "";           // same photo can be picked again
     const reader = new FileReader();
-    reader.onload = e => {
-        userCurrentDP = e.target.result;
+    reader.onload = e => gmDpCropOpen(e.target.result);
+    reader.onerror = () => showToast("That photo could not be read");
+    reader.readAsDataURL(file);
+}
+
+function gmDpCropOpen(src) {
+    if (!src) return;
+    // The editor opens immediately with the photo already on screen; the exact
+    // pixel size is filled in as soon as the image decodes, so a slow decode
+    // never leaves the person staring at a closed dialog.
+    gmDpCrop = { src, w: 1, h: 1, zoom: 1, ox: 0, oy: 0 };
+    const zoom = document.getElementById("dp-crop-zoom");
+    if (zoom) zoom.value = "1";
+    gmDpCropInitDrag();
+    showEl("dp-crop-modal");
+    requestAnimationFrame(gmDpCropRender);
+    gmDpCropRender();
+    const img = new Image();
+    img.onload = () => {
+        if (!gmDpCrop || gmDpCrop.src !== src) return;   // cancelled meanwhile
+        gmDpCrop.w = Math.max(1, img.naturalWidth || img.width || 1);
+        gmDpCrop.h = Math.max(1, img.naturalHeight || img.height || 1);
+        gmDpCropRender();
+    };
+    img.onerror = () => showToast("That photo could not be read");
+    img.src = src;
+}
+
+function gmDpCropViewportSize() {
+    const vp = document.getElementById("dp-crop-viewport");
+    const size = vp ? vp.clientWidth : 0;
+    return size > 0 ? size : 280;       // fallback keeps the maths valid off-screen
+}
+
+function gmDpCropGeometry() {
+    if (!gmDpCrop) return null;
+    const V = gmDpCropViewportSize();
+    const base = Math.max(V / gmDpCrop.w, V / gmDpCrop.h);
+    const dw = gmDpCrop.w * base * gmDpCrop.zoom;
+    const dh = gmDpCrop.h * base * gmDpCrop.zoom;
+    const maxOx = Math.max(0, (dw - V) / 2);
+    const maxOy = Math.max(0, (dh - V) / 2);
+    return { V, base, dw, dh, maxOx, maxOy };
+}
+
+function gmDpCropRender() {
+    if (!gmDpCrop) return;
+    const g = gmDpCropGeometry();
+    if (!g) return;
+    gmDpCrop.ox = Math.max(-g.maxOx, Math.min(g.maxOx, gmDpCrop.ox));
+    gmDpCrop.oy = Math.max(-g.maxOy, Math.min(g.maxOy, gmDpCrop.oy));
+    const el = document.getElementById("dp-crop-image");
+    if (el) {
+        el.style.backgroundImage = 'url("' + gmDpCrop.src + '")';
+        el.style.backgroundSize = g.dw + "px " + g.dh + "px";
+        el.style.backgroundPosition = "calc(50% + " + gmDpCrop.ox + "px) calc(50% + " + gmDpCrop.oy + "px)";
+    }
+}
+
+function gmDpCropZoom(value) {
+    if (!gmDpCrop) return;
+    const z = parseFloat(value);
+    gmDpCrop.zoom = Math.max(1, Math.min(4, isNaN(z) ? 1 : z));
+    gmDpCropRender();
+}
+
+// Drag / pinch on the preview. Pointer events cover mouse and touch; the
+// listeners are registered once and simply no-op when the editor is closed.
+function gmDpCropInitDrag() {
+    const vp = document.getElementById("dp-crop-viewport");
+    if (!vp || vp.dataset.wired === "1") return;
+    vp.dataset.wired = "1";
+    const points = new Map();
+    let pinchDist = 0;
+    let pinchZoom = 1;
+    vp.addEventListener("pointerdown", e => {
+        if (!gmDpCrop) return;
+        points.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (points.size === 1) gmDpCropDrag = { x: e.clientX, y: e.clientY };
+        if (points.size === 2) {
+            const [a, b] = [...points.values()];
+            pinchDist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+            pinchZoom = gmDpCrop.zoom;
+        }
+        try { vp.setPointerCapture(e.pointerId); } catch (err) { /* older shell */ }
+    });
+    vp.addEventListener("pointermove", e => {
+        if (!gmDpCrop) return;
+        if (!points.has(e.pointerId)) return;
+        points.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (points.size >= 2) {
+            const [a, b] = [...points.values()];
+            const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+            gmDpCropZoom(String(pinchZoom * (d / pinchDist)));
+            const slider = document.getElementById("dp-crop-zoom");
+            if (slider) slider.value = String(gmDpCrop.zoom);
+            return;
+        }
+        if (!gmDpCropDrag) return;
+        gmDpCrop.ox += e.clientX - gmDpCropDrag.x;
+        gmDpCrop.oy += e.clientY - gmDpCropDrag.y;
+        gmDpCropDrag = { x: e.clientX, y: e.clientY };
+        gmDpCropRender();
+    });
+    const release = e => {
+        points.delete(e.pointerId);
+        if (points.size < 2) pinchDist = 0;
+        if (points.size === 0) gmDpCropDrag = null;
+    };
+    vp.addEventListener("pointerup", release);
+    vp.addEventListener("pointercancel", release);
+}
+
+function gmDpCropCancel() {
+    gmDpCrop = null;
+    gmDpCropDrag = null;
+    hideEl("dp-crop-modal");
+}
+
+// Crops exactly what the circle showed, then stores it like any other photo.
+function gmDpCropApply() {
+    if (!gmDpCrop) return;
+    const g = gmDpCropGeometry();
+    const crop = gmDpCrop;
+    const finish = result => {
+        const data = result || crop.src;      // canvas unavailable → keep the original
+        userCurrentDP = data;
         safeStorage.set("gm_dp", userCurrentDP);
         updateHeaderDisplay();
         updateProfileScreen();
         broadcastToMesh({ type: "dp-update", sender: userGhostID, dpData: userCurrentDP });
+        gmDpCropCancel();
         showToast("Profile photo updated!");
     };
-    reader.readAsDataURL(file);
+    if (!g || crop.w <= 1 || crop.h <= 1) { finish(crop.src); return; }
+    const perSource = g.base * crop.zoom;                 // displayed px per source px
+    const srcSize = g.V / perSource;
+    const sx = crop.w / 2 - crop.ox / perSource - srcSize / 2;
+    const sy = crop.h / 2 - crop.oy / perSource - srcSize / 2;
+    let done = false;
+    const once = result => { if (!done) { done = true; finish(result); } };
+    // A photo that will not decode must not leave the dialog stuck on "Use
+    // photo"; after a moment the original is kept instead.
+    const guard = setTimeout(() => once(crop.src), 800);
+    try {
+        const canvas = document.createElement("canvas");
+        canvas.width = GM_DP_CROP_OUTPUT;
+        canvas.height = GM_DP_CROP_OUTPUT;
+        const ctx = canvas.getContext("2d");
+        const img = new Image();
+        img.onload = () => {
+            clearTimeout(guard);
+            try {
+                ctx.drawImage(img, sx, sy, srcSize, srcSize, 0, 0, GM_DP_CROP_OUTPUT, GM_DP_CROP_OUTPUT);
+                once(canvas.toDataURL("image/jpeg", 0.9));
+            } catch (err) { once(crop.src); }
+        };
+        img.onerror = () => { clearTimeout(guard); once(crop.src); };
+        img.src = crop.src;
+    } catch (e) {
+        clearTimeout(guard);
+        once(crop.src);
+    }
 }
 
 // ===== GHOST MODE =====
@@ -956,14 +1141,17 @@ function buildThemeGrid() {
         card.className = "theme-card" + (currentTheme === t.id ? " active" : "");
         card.style.background = t.bg;
         card.innerHTML = `<div style="font-size:13px;font-weight:700;text-shadow:0 1px 4px rgba(0,0,0,0.5);">${t.name}</div>`;
-        card.onclick = () => applyTheme(t.id);
+        // A tap here is a user-initiated theme change, which is the one moment
+        // the app shows an automatic sponsor break (see gmThemeSponsorBreak).
+        card.onclick = () => applyTheme(t.id, true);
         grid.appendChild(card);
     });
 }
 
-function applyTheme(themeId) {
+function applyTheme(themeId, fromUser) {
     const classes = ["theme-ocean","theme-amoled","theme-forest","theme-whatsapp","theme-sunset","theme-fish"];
     classes.forEach(c => document.body.classList.remove(c));
+    const changed = currentTheme !== themeId;
     currentTheme = themeId;
     safeStorage.set("gm_theme", themeId);
     if (themeId !== "default") document.body.classList.add("theme-" + themeId);
@@ -972,6 +1160,9 @@ function applyTheme(themeId) {
     else stopFishAnimation();
     buildThemeGrid();
     showToast("Theme applied!");
+    // Only a deliberate change earns the break — not the boot-time restore, a
+    // fallback, or re-tapping the theme that is already active.
+    if (fromUser && changed) gmThemeSponsorBreak(themeId);
 }
 
 // Android paints the status bar and the task switcher card with the page's
@@ -1441,6 +1632,10 @@ function setupConn(conn) {
             case "location": {
                 const chatId = data.groupId || data.sender;
                 showToast((data.senderName || data.sender) + " shared location");
+                // The pin is real: it comes from the location card the sender
+                // chose to share, so the Live Map can plot it without inventing
+                // a position or asking any server.
+                gmRememberPeerLocation(data.sender, data.lat, data.lng, data.senderName);
                 if (currentChatPeer === chatId) {
                     const lm = { id: "loc-"+Date.now(), sender: data.sender, text: "", direction: "incoming", dp: data.senderDP, contentType: "location", mediaPayload: { lat: data.lat, lng: data.lng }, time: nowTime() };
                     if (chatData[chatId]) chatData[chatId].messages.push(lm);
@@ -1567,17 +1762,21 @@ function gmReachablePeers() {
 // Shared renderer for every reachable-peer list. The WiFi tab's Ghosts You Can
 // Reach" card is the single home for it now, so there is one list to keep
 // correct instead of two copies that could drift apart.
-function renderPeopleListInto(containerId, peers) {
+function renderPeopleListInto(containerId, peers, options) {
     const list = document.getElementById(containerId);
+    const opts = options || {};
     if (!list) return 0;
     if (!peers.length) {
         // The empty state carries the two offline pairing actions, so a
         // first-time user is never told "nobody here" without a way forward.
-        list.innerHTML = '<div class="peer-empty">Nobody reachable yet — pair two phones directly, no internet needed.'
-            + '<div class="peer-empty-actions">'
+        // A transport panel can pass its own copy (Bluetooth / Wi-Fi Direct)
+        // while keeping the same way out.
+        const text = opts.emptyText || "Nobody reachable yet — pair two phones directly, no internet needed.";
+        const actions = opts.hideActions ? "" : '<div class="peer-empty-actions">'
             + '<button class="online-user-connect" onclick="startOfflineHost()">Show My QR</button>'
             + '<button class="online-user-connect" onclick="startOfflineJoinScan()">Scan Friend\'s QR</button>'
-            + '</div></div>';
+            + '</div>';
+        list.innerHTML = '<div class="peer-empty">' + text + actions + '</div>';
         return 0;
     }
     list.innerHTML = "";
@@ -1598,7 +1797,7 @@ function renderPeopleListInto(containerId, peers) {
         if (alreadyConnected) {
             btnHtml = `<button class="online-user-connect" style="background:var(--success);" onclick="openChat('${peerId}')">Open Chat</button>`;
         } else if (native) {
-            btnHtml = `<button class="online-user-connect" onclick="connectViaNativeTransport('${peerId}')">Connect</button>`;
+            btnHtml = `<button class="online-user-connect" onclick="gmConnectNativePeer('${peerId}')">Connect</button>`;
         } else {
             btnHtml = `<button class="online-user-connect" onclick="connectToPeer('${peerId}');showToast('Connecting...')">${isFreshDiscovery ? "Connect" : "Reconnect"}</button>`;
         }
@@ -1612,14 +1811,90 @@ function renderPeopleListInto(containerId, peers) {
     return peers.length;
 }
 
-// Draws the reachable list and updates its counter (the Online screen).
+// Phones a single radio found ("ble" or "wifi-direct"). Keeping the transport
+// in the filter is what lets Wi-Fi and Bluetooth be separate places without
+// maintaining two copies of the peer table.
+function gmPeersByTransport(transport) {
+    const out = [];
+    Object.keys(window.gmNativePeers || {}).forEach(id => {
+        const p = window.gmNativePeers[id];
+        if (p && p.transport === transport) out.push(id);
+    });
+    return out;
+}
+
+// Draws the reachable list + each transport's own list, and keeps their
+// counters in step (the Online screen shows everything, the WiFi and Bluetooth
+// panels show only their own radio).
 function renderPeerLists() {
     const peers = gmReachablePeers();
     renderPeopleListInto("online-reach-list", peers);
     const n = peers.length;
     const counter = document.getElementById("online-reach-count");
     if (counter) counter.innerText = n;
+
+    const wifiPeers = gmPeersByTransport("wifi-direct");
+    renderPeopleListInto("wifi-peer-list", wifiPeers, {
+        emptyText: "No Wi-Fi Direct phones found yet. Show your QR, or scan a friend's QR."
+    });
+    const wifiCount = document.getElementById("wifi-peer-count");
+    if (wifiCount) wifiCount.innerText = wifiPeers.length;
+
+    const btPeers = gmPeersByTransport("ble");
+    renderPeopleListInto("bt-peer-list", btPeers, {
+        emptyText: gmNativeMeshAvailable()
+            ? "No Bluetooth phones nearby yet. Ask your friend to open Ghost Mesh and keep Bluetooth on."
+            : "Bluetooth discovery needs the Ghost Mesh Android app. On the web, use the WiFi tab's QR pairing instead.",
+        hideActions: true
+    });
+    const btCount = document.getElementById("bt-peer-count");
+    if (btCount) btCount.innerText = btPeers.length;
+    gmSyncBluetoothStatus(btPeers.length);
     return n;
+}
+
+// The Bluetooth panel's one-line status: permission/unsupported cases get a
+// real sentence instead of a silent empty list.
+function gmSyncBluetoothStatus(nearby) {
+    const el = document.getElementById("bt-status-line");
+    if (!el) return;
+    const toggle = document.getElementById("bt-scan-toggle");
+    const scanning = toggle ? toggle.checked : true;
+    if (!gmNativeMeshAvailable()) {
+        el.innerText = "Bluetooth discovery runs inside the Android app. This build can still pair with a QR code from the WiFi tab.";
+    } else if (!scanning) {
+        // One switch drives the native service, which scans both radios, so the
+        // sentence says both instead of implying Bluetooth alone is off.
+        el.innerText = "Nearby discovery is off — turn it on to find phones over Bluetooth and Wi-Fi Direct.";
+    } else if (nearby > 0) {
+        el.innerText = nearby + (nearby === 1 ? " phone" : " phones") + " found near you. Tap Connect to open a private chat.";
+    } else {
+        el.innerText = "Scanning… ask your friend to open Ghost Mesh with Bluetooth on.";
+    }
+}
+
+function gmSetBluetoothScan(on) {
+    const label = document.getElementById("bt-toggle-label");
+    if (label) {
+        label.innerText = on ? "On" : "Off";
+        label.classList.toggle("radar-on-color", !!on);
+    }
+    if (!gmNativeMeshAvailable()) {
+        showToast("Bluetooth discovery needs the Android app");
+        renderPeerLists();
+        return;
+    }
+    if (on) { gmStartNativeDiscovery(); showToast("Nearby discovery on"); }
+    else { gmStopNativeDiscovery(); showToast("Nearby discovery off"); }
+    renderPeerLists();
+}
+
+function gmRefreshBluetoothPeers() {
+    if (gmNativeMeshAvailable() && typeof window.GhostNative.refreshPeers === "function") {
+        try { window.GhostNative.refreshPeers(); } catch (e) { /* older shell */ }
+    }
+    renderPeerLists();
+    showToast("Scanning for nearby phones…");
 }
 
 function renderOnlineUsers() {
@@ -1634,7 +1909,15 @@ function gmRenderOnlineStrip() {
     const list = document.getElementById("online-strip-list");
     const empty = document.getElementById("online-strip-empty");
     if (!list) return;
-    const ids = Object.keys(onlineUsers).filter(id => onlineUsers[id] && onlineUsers[id].online && !blockedPeers.has(id));
+    // Every transport, one strip: people online over the internet (WebRTC
+    // presence) plus phones found on the Wi-Fi Direct and Bluetooth radios.
+    // The Chats tab must never hide someone just because they came in over a
+    // different radio.
+    const ids = [...new Set([
+        ...Object.keys(onlineUsers).filter(id => onlineUsers[id] && onlineUsers[id].online),
+        ...(activeConnections || []).filter(c => c && c.open).map(c => c.peer),
+        ...Object.keys(window.gmNativePeers || {})
+    ])].filter(id => id && id !== userGhostID && !blockedPeers.has(id));
     list.innerHTML = "";
     if (!ids.length) {
         if (empty) empty.classList.remove("hidden");
@@ -1643,8 +1926,9 @@ function gmRenderOnlineStrip() {
     if (empty) empty.classList.add("hidden");
     const personSvg = '<svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>';
     ids.slice(0, 20).forEach(id => {
-        const info = onlineUsers[id];
-        const name = info.displayName || id;
+        const native = (window.gmNativePeers || {})[id];
+        const info = onlineUsers[id] || null;
+        const name = (info && info.displayName) || (native && native.name) || id;
         const dp = chatData[id]?.dp;
         const connected = activeConnections.some(c => c.peer === id && c.open);
         const btn = document.createElement("button");
@@ -1670,6 +1954,7 @@ function gmRenderOnlineStrip() {
         btn.appendChild(caption);
         btn.addEventListener("click", () => {
             if (connected || chatData[id]) openChat(id);
+            else if (native) connectViaNativeTransport(id);
             else connectToPeer(id);
         });
         list.appendChild(btn);
@@ -1678,6 +1963,22 @@ function gmRenderOnlineStrip() {
 
 // ===== CONNECT =====
 function openNewConnect() { closeAllMenus(); showEl("connect-modal"); }
+
+// The Connect button on a native peer. A Wi-Fi Direct device address can be
+// joined straight away. A Bluetooth advertisement is not a chat link: the
+// Android WebView has no BLE data API, and the native bridge's connect() only
+// speaks Wi-Fi Direct, so handing it a BLE MAC would fail silently. Instead the
+// Bluetooth row opens the QR handshake this app can genuinely complete (two
+// phones on the same hotspot / Wi-Fi Direct link), and says so up front.
+function gmConnectNativePeer(peerId) {
+    const peer = (window.gmNativePeers || {})[peerId];
+    if (!peer) { connectToPeer(peerId); return; }
+    if (peer.transport !== "ble") { connectViaNativeTransport(peerId); return; }
+    const name = peer.name || peerId;
+    gmConfirm("Bluetooth found " + name + ". Bluetooth carries the name, not the messages — Android's WebView has no Bluetooth data link. The QR handshake opens the chat as soon as both phones are on the same Wi-Fi / hotspot.",
+        () => { openOfflineConnect(); startOfflineHost(); },
+        { title: "Chat over Bluetooth", confirmLabel: "Open QR connect" });
+}
 
 // Connect to a peer the native layer discovered over BLE or Wi-Fi Direct.
 // The Android shell exposes window.gmNativePeers; outside the APK this simply
@@ -1691,8 +1992,10 @@ function connectViaNativeTransport(peerId) {
         return;
     }
     try {
+        // connect() is the Wi-Fi Direct join. BLE peers never get here —
+        // gmConnectNativePeer hands them the QR handshake instead.
         bridge.connect(peer.address || peerId);
-        showToast(peer.transport === "wifi-direct" ? "Requesting Wi-Fi Direct connection…" : "Opening Bluetooth link…");
+        showToast("Requesting Wi-Fi Direct connection…");
     } catch (e) {
         console.error("Native connect failed:", e);
         showToast("Could not start that native connection");
@@ -1705,7 +2008,9 @@ window.gmNativePeers = window.gmNativePeers || {};
 window.gmApplyNativePeers = function (peers) {
     window.gmNativePeers = {};
     (peers || []).forEach(p => { if (p && p.ghostId) window.gmNativePeers[p.ghostId] = p; });
-    renderPeerLists();
+    // Both transport panels, the every-transport list and the Chats strip read
+    // the same table, so all of them refresh from this one push.
+    renderOnlineUsers();
 };
 
 // ===== GROUP CHAT: creation =====
@@ -3402,7 +3707,7 @@ const themeOrder = ["default", "whatsapp", "ocean", "amoled", "forest", "sunset"
 function cycleThemeQuick() {
     const idx = themeOrder.indexOf(currentTheme);
     const next = themeOrder[(idx + 1) % themeOrder.length];
-    applyTheme(next);
+    applyTheme(next, true);
     const btn = document.getElementById("quick-theme-btn");
     if (btn) {
         btn.style.color = "var(--accent)";
@@ -3976,53 +4281,121 @@ function gmMapPin(lat, lng, popupHtml, mapInst, openNow) {
     return marker;
 }
 
+// ===== LIVE MAP (full-screen screen, bottom nav → Map) =====
+// Only real coordinates are plotted: your own GPS fix (read only after you tap
+// "Use my location") and pins from location cards somebody chose to share with
+// you. The old version dropped connected peers at random offsets around you,
+// which looked like tracking data that was never actually measured.
+let gmMapMarkers = [];
+const gmPeerLocations = {};      // ghostId -> { lat, lng, name, at }
+let gmMapHasFix = false;
+
+function gmMapStatus(text) {
+    const el = document.getElementById("map-status-line");
+    if (el) el.innerText = text;
+}
+
+function gmRememberPeerLocation(peerId, lat, lng, name) {
+    if (!peerId || typeof lat !== "number" || typeof lng !== "number") return;
+    gmPeerLocations[peerId] = { lat, lng, name: name || peerId, at: Date.now() };
+    gmSyncMapPins();
+}
+
 function initRadarMap() {
     if (typeof L === "undefined") return; // leaflet.js unavailable — everything else still works
     try {
-        radarMapInstance = L.map('live-radar-map').setView([20.5937, 78.9629], 5);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(radarMapInstance);
-        navigator.geolocation?.getCurrentPosition(pos => {
-            userLat = pos.coords.latitude; userLng = pos.coords.longitude;
-            hasRealLocation = true;
-            radarMapInstance.setView([userLat, userLng], 13);
-            gmMapPin(userLat, userLng, `<b>You (${userGhostID})</b>`, radarMapInstance, true);
-            spawnNearbyNodes(userLat, userLng, radarMapInstance);
-        }, () => spawnNearbyNodes(20.5937, 78.9629, radarMapInstance));
-    } catch(e) { console.error(e); }
+        radarMapInstance = L.map('live-radar-map', { zoomControl: false, attributionControl: true })
+            .setView([20.5937, 78.9629], 4);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap'
+        }).addTo(radarMapInstance);
+        gmMapStatus("Location is off — tap “Use my location” to put yourself on the map.");
+    } catch (e) { console.error(e); }
 }
 
-async function toggleRadarMap() {
+async function openLiveMap() {
     closeAllMenus();
-    const map = document.getElementById("map-container");
-    if (!map) return;
-    const wasHidden = map.classList.contains("hidden");
-    map.classList.toggle("hidden", !wasHidden);
-    if (!wasHidden) return;                 // closing it — nothing to load
-    if (!radarMapInstance) {
-        const ok = await gmEnsureLib("leaflet");
-        if (!ok || typeof L === "undefined") {
-            map.classList.add("hidden");
-            showToast("Radar map could not load — it needs one online visit");
-            return;
-        }
-        initRadarMap();
+    const screen = document.getElementById("map-screen");
+    if (!screen) return;
+    showScreen("map-screen");
+    const ok = await gmEnsureLib("leaflet");
+    if (!ok || typeof L === "undefined") {
+        gmMapStatus("The map tiles need one online visit — everything else still works offline.");
+        showToast("Map could not load — it needs one online visit");
+        return;
     }
-    if (radarMapInstance) setTimeout(() => radarMapInstance.invalidateSize(), 300);
+    if (!radarMapInstance) initRadarMap();
+    // The screen was display:none while it was built, so Leaflet has to
+    // re-measure once the browser has actually laid it out.
+    setTimeout(() => {
+        if (!radarMapInstance) return;
+        radarMapInstance.invalidateSize();
+        gmSyncMapPins();
+    }, 140);
 }
 
-// FIX 2 & 3: spawnNearbyNodes removed — no fake users, no fake map nodes.
-// Only real connected peers appear on map and online users list.
-function spawnNearbyNodes(lat, lng, mapInst) {
-    // Real peers only — markers added when peers connect via setupConn
-    activeConnections.forEach(conn => {
-        const name = chatData[conn.peer]?.displayName || conn.peer;
-        gmMapPin(lat + (Math.random()-0.5)*0.01, lng + (Math.random()-0.5)*0.01,
-            `<b>${name}</b><br>P2P Connected<br><button class="map-connect-btn" onclick="openChat('${conn.peer}')">Open Chat</button>`,
-            mapInst);
-    });
-    if (activeConnections.length === 0) {
-        L.popup().setLatLng([lat, lng]).setContent("No peers nearby yet").openOn(mapInst);
+function closeLiveMap() { showScreen("chatlist-screen"); }
+
+// The header menu still calls this (its label is "Radar Map") and the map is
+// now a screen, so the same entry point opens/closes that screen.
+function toggleRadarMap() {
+    const screen = document.getElementById("map-screen");
+    if (screen && !screen.classList.contains("hidden")) { closeLiveMap(); return; }
+    openLiveMap();
+}
+
+function gmMapLocateMe() {
+    if (!navigator.geolocation) {
+        gmMapStatus("This device has no location service — nothing can be plotted.");
+        showToast("Location is not available on this device");
+        return;
     }
+    gmMapStatus("Getting your location…");
+    navigator.geolocation.getCurrentPosition(pos => {
+        userLat = pos.coords.latitude;
+        userLng = pos.coords.longitude;
+        hasRealLocation = true;
+        gmMapHasFix = true;
+        if (radarMapInstance) {
+            radarMapInstance.setView([userLat, userLng], 15);
+            gmSyncMapPins();
+        }
+        const coords = document.getElementById("map-my-coords");
+        if (coords) coords.innerText = userLat.toFixed(4) + ", " + userLng.toFixed(4);
+        gmMapStatus("Your live position — kept on this device, never uploaded.");
+    }, () => {
+        gmMapStatus("Location permission was not given. The map still works — nothing is read.");
+        showToast("Location permission denied");
+    }, { enableHighAccuracy: true, maximumAge: 20000, timeout: 15000 });
+}
+
+function gmMapRecenter() {
+    if (gmMapHasFix && radarMapInstance) {
+        radarMapInstance.setView([userLat, userLng], 15);
+        return;
+    }
+    gmMapLocateMe();
+}
+
+// Redraws every real pin: you (if a fix was taken) plus each shared location.
+function gmSyncMapPins() {
+    if (!radarMapInstance || typeof L === "undefined") return;
+    gmMapMarkers.forEach(m => { try { radarMapInstance.removeLayer(m); } catch (e) {} });
+    gmMapMarkers = [];
+    if (gmMapHasFix) {
+        gmMapMarkers.push(gmMapPin(userLat, userLng,
+            `<b>You (${userGhostID})</b>`, radarMapInstance, false));
+    }
+    const ids = Object.keys(gmPeerLocations);
+    ids.forEach(peerId => {
+        const p = gmPeerLocations[peerId];
+        gmMapMarkers.push(gmMapPin(p.lat, p.lng,
+            `<b>${p.name}</b><br>Shared location<br><button class="map-connect-btn" onclick="openChat('${peerId}')">Open Chat</button>`,
+            radarMapInstance, false));
+    });
+    const count = document.getElementById("map-peer-count");
+    if (count) count.innerText = ids.length;
 }
 
 // ===== PUSH NOTIFICATION =====
@@ -4444,9 +4817,16 @@ function renderCreditsUI() {
     const bonusLabel = document.getElementById("bonus-earn-label");
     if (bonusLabel) {
         const wait = msUntilBonus();
-        bonusLabel.innerText = wait > 0 ? `Bonus ready in ${formatBonusWait(wait)}` : `Daily Bonus (+5)`;
+        bonusLabel.innerText = wait > 0 ? `Bonus ready in ${formatBonusWait(wait)}` : `Daily Bonus (+${BONUS_AMOUNT})`;
     }
     if (bonusBtn) bonusBtn.disabled = !hasProfile || msUntilBonus() > 0;
+    // Settings row mirrors the same countdown, so it never claims "ready" while
+    // the sheet's own button is still waiting.
+    const bonusState = document.getElementById("settings-bonus-state");
+    if (bonusState) {
+        const wait = msUntilBonus();
+        bonusState.innerText = hasProfile ? (wait > 0 ? "in " + formatBonusWait(wait) : "ready") : "Off";
+    }
 
 
     if (premiumBtn) {
@@ -4470,8 +4850,9 @@ function renderCreditsUI() {
 
 // ----- Earning -----
 // One free bonus per 24 hours, enforced on-device. No ad network is involved,
-// so nothing here pretends an ad played.
-const BONUS_AMOUNT = 5;
+// so nothing here pretends an ad played. The amount is deliberately small (2):
+// the bigger daily earn is the sponsor break below.
+const BONUS_AMOUNT = 2;
 const BONUS_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 function bonusClaimedAt() {
     if (!userGhostID) return 0;
@@ -4495,6 +4876,190 @@ function claimDailyBonus() {
     safeStorage.set("gm_bonus_at_" + userGhostID, String(Date.now()));
     addCredits(BONUS_AMOUNT);
     showToast(`+${BONUS_AMOUNT} credits added — next bonus in 24h`);
+    renderCreditsUI();
+}
+
+// ===== SPONSOR BREAK (the app's only ad surface) =====
+// Two places open it and nothing else does:
+//   • header 3-dot menu → "Earn Credits — Watch a Sponsor" (rewarded, +2)
+//   • changing the chat theme (a short break, no reward)
+// A real ad network is used the moment one is configured in index.html
+// (<meta name="gm-ad-client"> + <meta name="gm-ad-slot"> for AdSense, or a
+// custom <meta name="gm-ad-html-url"> slot). Until then the slot carries the
+// app's own house ad and says so — the reward is still paid for the view, but
+// nothing pretends a third-party ad played.
+const GM_AD_REWARD = 2;
+const GM_AD_VIEW_MS = 15000;          // rewarded view length
+const GM_AD_BREAK_MS = 5000;          // theme-change break length
+const GM_AD_DAILY_CAP = 10;           // 10 views a day = 20 credits, max
+let gmAdTimer = null;
+let gmAdState = null;                 // { mode, endsAt, ready, claimed }
+
+function gmAdMeta(name) {
+    const el = document.querySelector('meta[name="' + name + '"]');
+    return el ? String(el.content || "").trim() : "";
+}
+function gmAdNetwork() {
+    const network = gmAdMeta("gm-ad-network").toLowerCase();
+    if (network === "adsense" && gmAdMeta("gm-ad-client") && gmAdMeta("gm-ad-slot")) return "adsense";
+    if (gmAdMeta("gm-ad-html-url")) return "custom";
+    return "house";
+}
+function gmAdViewsToday() {
+    if (!userGhostID) return 0;
+    const raw = safeStorage.get("gm_ad_views_" + userGhostID);
+    if (!raw) return 0;
+    try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || parsed.day !== gmTodayKey()) return 0;
+        return Math.max(0, parseInt(parsed.count, 10) || 0);
+    } catch (e) { return 0; }
+}
+function gmTodayKey() {
+    const d = new Date();
+    return d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate();
+}
+function gmAdViewsLeft() { return Math.max(0, GM_AD_DAILY_CAP - gmAdViewsToday()); }
+// How long a break lasts. window.GM_AD_DURATION_MS can shorten it (used by the
+// runtime checks and handy while tuning the ad slot), but the shipped default
+// is the real 15s / 5s.
+function gmAdDuration(mode) {
+    const override = window.GM_AD_DURATION_MS;
+    if (typeof override === "number" && override > 0) return override;
+    return mode === "earn" ? GM_AD_VIEW_MS : GM_AD_BREAK_MS;
+}
+function gmRegisterAdView() {
+    if (!userGhostID) return;
+    safeStorage.set("gm_ad_views_" + userGhostID,
+        JSON.stringify({ day: gmTodayKey(), count: gmAdViewsToday() + 1 }));
+}
+
+// Renders the ad itself into the slot. Kept in one function so a real network
+// can be dropped in without touching the timer/reward logic.
+function gmRenderAdSlot() {
+    const slot = document.getElementById("gm-ad-slot");
+    const tag = document.getElementById("gm-ad-tag");
+    if (!slot) return;
+    const network = gmAdNetwork();
+    slot.innerHTML = "";
+    if (tag) tag.innerText = network === "house" ? "House ad" : "Sponsored";
+    if (network === "adsense") {
+        const ins = document.createElement("ins");
+        ins.className = "adsbygoogle";
+        ins.style.display = "block";
+        ins.setAttribute("data-ad-client", gmAdMeta("gm-ad-client"));
+        ins.setAttribute("data-ad-slot", gmAdMeta("gm-ad-slot"));
+        ins.setAttribute("data-ad-format", "rectangle");
+        slot.appendChild(ins);
+        if (!window.__gmAdsenseLoaded) {
+            window.__gmAdsenseLoaded = true;
+            const s = document.createElement("script");
+            s.async = true;
+            s.src = "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=" +
+                encodeURIComponent(gmAdMeta("gm-ad-client"));
+            document.head.appendChild(s);
+        }
+        try { (window.adsbygoogle = window.adsbygoogle || []).push({}); } catch (e) { /* blocked */ }
+    } else if (network === "custom") {
+        const frame = document.createElement("iframe");
+        frame.src = gmAdMeta("gm-ad-html-url");
+        frame.title = "Sponsored content";
+        frame.setAttribute("sandbox", "allow-scripts allow-popups allow-same-origin");
+        slot.appendChild(frame);
+    } else {
+        // House ad: promotes the app itself, clearly labelled, no third party.
+        slot.innerHTML = '<div class="gm-ad-house">'
+            + '<div class="gm-ad-house-mark">Ghost Mesh Premium</div>'
+            + '<p>No ads while you chat, unlimited pins, custom wallpapers and HD calls — ₹99 a month.</p>'
+            + '<button class="credits-earn-btn" onclick="gmCloseSponsoredBreak();openPremiumModal()">See Premium</button>'
+            + '<span class="gm-ad-house-note">House ad — no third-party ad network is configured in this build.</span>'
+            + '</div>';
+    }
+    const note = document.getElementById("gm-ad-note");
+    if (note) {
+        note.innerText = network === "house"
+            ? "This is the app's own advert. Add an ad-network meta tag in index.html to serve third-party ads here."
+            : "Ads are provided by the configured ad network.";
+    }
+}
+
+// mode "earn" → rewarded (15s, then +2 credits). mode "theme" → 5s break.
+function gmOpenSponsoredBreak(mode) {
+    closeAllMenus();
+    if (mode === "earn" && !userGhostID) { showToast("Create your Ghost ID first to start earning credits"); return; }
+    if (mode === "earn" && gmAdViewsLeft() <= 0) {
+        showToast("Daily sponsor limit reached — come back tomorrow");
+        return;
+    }
+    gmAdState = { mode: mode === "theme" ? "theme" : "earn", endsAt: 0, claimed: false };
+    const title = document.getElementById("gm-ad-title");
+    if (title) title.innerText = gmAdState.mode === "earn" ? "Watch to earn +2 credits" : "One short word from our sponsor";
+    gmRenderAdSlot();
+    document.getElementById("gm-ad-claim")?.classList.add("hidden");
+    document.getElementById("gm-ad-continue")?.classList.add("hidden");
+    document.getElementById("gm-ad-close")?.classList.remove("hidden");
+    showEl("gm-ad-screen");
+    const total = gmAdDuration(gmAdState.mode);
+    gmAdState.endsAt = Date.now() + total;
+    gmTickSponsoredBreak(total);
+    if (gmAdTimer) clearInterval(gmAdTimer);
+    gmAdTimer = setInterval(() => gmTickSponsoredBreak(total), 250);
+}
+
+function gmTickSponsoredBreak(total) {
+    if (!gmAdState) return;
+    const left = Math.max(0, gmAdState.endsAt - Date.now());
+    const pct = Math.min(100, Math.round(((total - left) / total) * 100));
+    const fill = document.getElementById("gm-ad-progress-fill");
+    if (fill) fill.style.width = pct + "%";
+    const timer = document.getElementById("gm-ad-timer");
+    if (left > 0) {
+        if (timer) timer.innerText = gmAdState.mode === "earn"
+            ? "You can claim in " + Math.ceil(left / 1000) + "s"
+            : "Continuing in " + Math.ceil(left / 1000) + "s";
+        return;
+    }
+    if (timer) timer.innerText = gmAdState.mode === "earn" ? "Thanks for watching" : "Break over";
+    if (gmAdTimer) { clearInterval(gmAdTimer); gmAdTimer = null; }
+    if (gmAdState.mode === "earn") {
+        document.getElementById("gm-ad-claim")?.classList.remove("hidden");
+        document.getElementById("gm-ad-close")?.classList.add("hidden");
+        const claim = document.getElementById("gm-ad-claim");
+        if (claim && !gmAdState.claimed) claim.innerText = "Claim +" + GM_AD_REWARD + " credits (" + gmAdViewsLeft() + " left today)";
+    } else {
+        document.getElementById("gm-ad-continue")?.classList.remove("hidden");
+        document.getElementById("gm-ad-close")?.classList.add("hidden");
+    }
+}
+
+function gmClaimSponsoredCredits() {
+    if (!gmAdState || gmAdState.mode !== "earn" || gmAdState.claimed) return;
+    if (Date.now() < gmAdState.endsAt) { showToast("Watch the full sponsor break first"); return; }
+    if (gmAdViewsLeft() <= 0) { showToast("Daily sponsor limit reached — come back tomorrow"); return; }
+    gmAdState.claimed = true;
+    gmRegisterAdView();
+    addCredits(GM_AD_REWARD);
+    renderCreditsUI();
+    showToast("+" + GM_AD_REWARD + " credits added — thanks for watching");
+    gmCloseSponsoredBreak();
+}
+
+function gmCloseSponsoredBreak() {
+    if (gmAdTimer) { clearInterval(gmAdTimer); gmAdTimer = null; }
+    gmAdState = null;
+    hideEl("gm-ad-screen");
+    const slot = document.getElementById("gm-ad-slot");
+    if (slot) slot.innerHTML = "";        // stop a video/iframe the moment it closes
+    const fill = document.getElementById("gm-ad-progress-fill");
+    if (fill) fill.style.width = "0%";
+}
+
+// Called when the chat theme changes: the ONLY automatic ad in the app.
+function gmThemeSponsorBreak(themeId) {
+    if (!userGhostID) return;
+    if (gmAdState) return;                // never stack two breaks
+    if (safeStorage.get("gm_theme_ads_off") === "1") return;
+    gmOpenSponsoredBreak("theme");
 }
 
 function shareAppForCredits() {
@@ -4705,13 +5270,13 @@ function openLocationInMaps(lat, lng) {
     window.open(`https://www.google.com/maps?q=${lat},${lng}`, "_blank");
 }
 async function openLocationOnRadar(lat, lng) {
-    const map = document.getElementById("map-container");
-    if (map && map.classList.contains("hidden")) await toggleRadarMap();
-    if (!radarMapInstance) { showToast("Radar map not ready yet"); return; }
+    const screen = document.getElementById("map-screen");
+    if (screen && screen.classList.contains("hidden")) await openLiveMap();
+    if (!radarMapInstance) { showToast("Map not ready yet"); return; }
     setTimeout(() => {
         radarMapInstance.invalidateSize();
         radarMapInstance.setView([lat, lng], 15);
-        gmMapPin(lat, lng, "📍 Shared location", radarMapInstance, true);
+        gmMapPin(lat, lng, "Shared location", radarMapInstance, true);
     }, 250);
 }
 
@@ -4728,6 +5293,8 @@ const androidBackLayers = [
     ["qr-scan-overlay", () => cancelCameraScan()],
     ["incoming-call-overlay", () => rejectIncomingCall()],
     ["call-screen", () => endCurrentCall()],
+    ["dp-crop-modal", () => gmDpCropCancel()],
+    ["gm-ad-screen", () => gmCloseSponsoredBreak()],
     ["gm-confirm", () => gmConfirmResolve(false)],
     ["gm-paste-modal", () => gmClosePasteModal()],
     ["app-lock-modal", () => closeAppLockSheet()],
@@ -4743,6 +5310,8 @@ const androidBackLayers = [
     ["destruct-overlay", () => hideEl("destruct-overlay")],
     ["theme-screen", () => closeThemePicker()],
     ["profile-screen", () => closeProfile()],
+    ["online-screen", () => closeOnlineScreen()],
+    ["map-screen", () => closeLiveMap()],
     ["chat-screen", () => goBackToList()]
 ];
 

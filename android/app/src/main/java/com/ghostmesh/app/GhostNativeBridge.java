@@ -16,9 +16,11 @@ import android.webkit.JavascriptInterface;
  *   GhostNative.connect(address)       -> join that Wi-Fi Direct device
  *
  * Discovered peers are pushed *into* the page instead: MainActivity evaluates
- * `window.gmApplyNativePeers([...])`, which merges them into the same lists
- * (Chats → "Online Nearby", WiFi → "Ghosts You Can Reach") that PeerJS
- * discovery feeds, so the two can never drift apart.
+ * `window.gmApplyNativePeers([...])`, which feeds every list from one table —
+ * the Bluetooth tab (transport "ble"), the WiFi panel's Wi-Fi Direct card
+ * (transport "wifi-direct"), the every-transport "Ghosts You Can Reach" screen
+ * and the Chats tab's online strip — alongside the PeerJS presence data, so the
+ * WebView and the radios can never drift apart.
  *
  * Every method is called on the WebView's Java bridge thread, so nothing here
  * touches UI or the service directly — everything is posted to the main thread.

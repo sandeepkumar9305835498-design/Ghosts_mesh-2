@@ -453,27 +453,89 @@ body {
 }
 .search-bar input::placeholder { color: var(--text3); }
 
-/* ===== RADAR MAP ===== */
-#map-container {
-    position: relative;
-    width: 100%;
-    height: 240px;
-    border-bottom: 2px solid var(--accent);
-    flex-shrink: 0;
-    z-index: 10;
+/* ===== LIVE MAP ===== */
+/* The map is its own full-screen screen now (bottom nav → Map), so the tile
+   canvas takes every pixel the app has and the chrome floats on top of it. */
+#map-screen { position: relative; padding: 0; overflow: hidden; }
+/* z-index: 0 makes this the map's own stacking context, so Leaflet's panes and
+   controls (z-index 200-800 internally) stay under the app's floating nav. */
+.live-map-wrap { position: absolute; inset: 0; z-index: 0; overflow: hidden; }
+#live-radar-map { width: 100%; height: 100%; background: var(--bg2); }
+/* Leaflet paints a white/grey background of its own; the app is dark. */
+.live-map-wrap .leaflet-container { background: var(--bg2); font-family: inherit; }
+.live-map-wrap .leaflet-control-attribution {
+    background: rgba(0, 0, 0, 0.55) !important;
+    color: var(--text3) !important;
+    font-size: 9px;
 }
-#live-radar-map { width: 100%; height: 100%; }
-.map-close-btn {
+.live-map-wrap .leaflet-control-attribution a { color: var(--text2) !important; }
+
+.live-map-top {
     position: absolute;
-    top: 8px; right: 8px;
-    z-index: 999;
-    background: rgba(0,0,0,0.75);
-    color: white; border: none;
-    padding: 6px 14px;
-    border-radius: 20px;
-    font-size: 12px;
-    font-weight: 600;
+    top: calc(10px + env(safe-area-inset-top, 0px));
+    left: 10px; right: 10px;
+    z-index: 500;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    backdrop-filter: blur(14px);
+    box-shadow: 0 10px 26px rgba(0,0,0,0.45);
+}
+.live-map-title { flex: 1; min-width: 0; }
+.live-map-title h3 { font-size: 15px; color: var(--text); line-height: 1.2; }
+.live-map-title span {
+    display: block;
+    font-size: 10.5px;
+    color: var(--text3);
+    margin-top: 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.live-map-round-btn {
+    flex: 0 0 auto;
+    width: 36px; height: 36px;
+    display: grid; place-items: center;
+    border-radius: 50%;
+    border: 1px solid var(--border2);
+    background: var(--bg2);
+    color: var(--text);
     cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+.live-map-round-btn:active { transform: scale(0.94); }
+
+.live-map-panel {
+    position: absolute;
+    left: 10px; right: 10px;
+    bottom: calc(var(--gm-nav-h) + 14px + env(safe-area-inset-bottom, 0px));
+    z-index: 500;
+    padding: 12px 14px 13px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    backdrop-filter: blur(14px);
+    box-shadow: 0 14px 34px rgba(0,0,0,0.5);
+}
+.live-map-row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--text2);
+    padding: 3px 0;
+}
+.live-map-row-text { flex: 1; }
+.live-map-row-value { font-size: 11px; color: var(--text3); font-variant-numeric: tabular-nums; }
+.live-map-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+.live-map-dot.you { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.live-map-dot.peer { background: var(--success); }
+.live-map-actions { display: flex; gap: 8px; margin-top: 9px; }
+.live-map-actions .credits-earn-btn { flex: 1; justify-content: center; padding: 9px 10px; }
+.live-map-note {
+    margin: 9px 0 0;
+    font-size: 10px;
+    line-height: 1.5;
+    color: var(--text3);
 }
 .map-connect-btn {
     background: var(--accent); color: white;
@@ -2728,4 +2790,223 @@ select:focus:not(:focus-visible) {
     line-height: 1.5;
     text-align: center;
     color: var(--text3);
+}
+
+/* =====================================================================
+   BLUETOOTH PANEL
+   The WiFi panel and this one are the same shape on purpose: a radio
+   toggle, the phones that radio found, and one way forward.
+   ===================================================================== */
+.bt-hero {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 4px 12px 14px;
+    padding: 14px;
+    background:
+        radial-gradient(120% 120% at 0% 0%, var(--accent-soft), transparent 70%),
+        var(--bg2);
+    border: 1px solid var(--border2);
+    border-radius: 16px;
+}
+.bt-hero-badge {
+    flex: 0 0 auto;
+    width: 44px; height: 44px;
+    display: grid; place-items: center;
+    border-radius: 14px;
+    background: var(--accent-soft);
+    border: 1px solid var(--border);
+    color: var(--accent);
+}
+.bt-hero-text { min-width: 0; }
+.bt-hero-text h3 { font-size: 16px; color: var(--text); line-height: 1.2; }
+.bt-hero-text .sub { margin-top: 3px; line-height: 1.45; }
+.bt-note {
+    margin: 0 18px 22px;
+    font-size: 10.5px;
+    line-height: 1.5;
+    color: var(--text3);
+    text-align: center;
+}
+/* The Bluetooth panel's list keeps the reach-list rhythm but starts a little
+   further from the hero card. */
+#bt-peer-list { padding-top: 2px; }
+
+/* =====================================================================
+   SPONSOR BREAK (the only ad surface in the app)
+   ===================================================================== */
+.gm-ad-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+    background: rgba(0, 0, 0, 0.86);
+    backdrop-filter: blur(6px);
+    animation: gmAdIn 0.22s var(--gm-ease) both;
+}
+.gm-ad-screen.hidden { display: none !important; }
+@keyframes gmAdIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+.gm-ad-card {
+    width: min(400px, 100%);
+    max-height: calc(100% - 20px);
+    overflow-y: auto;
+    padding: 16px 16px 18px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+}
+.gm-ad-card h4 {
+    font-size: 16px;
+    color: var(--text);
+    margin: 10px 0 12px;
+    line-height: 1.3;
+}
+.gm-ad-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.gm-ad-tag {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text3);
+    border: 1px solid var(--border2);
+    border-radius: 999px;
+    padding: 3px 9px;
+}
+.gm-ad-close {
+    width: 30px; height: 30px;
+    display: grid; place-items: center;
+    border-radius: 50%;
+    border: 1px solid var(--border2);
+    background: var(--bg2);
+    color: var(--text2);
+    cursor: pointer;
+}
+.gm-ad-close.hidden { display: none !important; }
+.gm-ad-slot {
+    min-height: 190px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 16px;
+    border: 1px dashed var(--border2);
+    background: var(--bg);
+    overflow: hidden;
+}
+.gm-ad-slot iframe { width: 100%; height: 220px; border: 0; }
+.gm-ad-slot .adsbygoogle { width: 100%; min-height: 190px; }
+.gm-ad-house {
+    padding: 18px 16px;
+    text-align: center;
+}
+.gm-ad-house-mark {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 999px;
+    padding: 4px 10px;
+    margin-bottom: 10px;
+}
+.gm-ad-house p {
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--text2);
+    margin: 0 0 12px;
+}
+.gm-ad-house .credits-earn-btn { margin: 0 auto; }
+.gm-ad-house-note {
+    display: block;
+    margin-top: 10px;
+    font-size: 9.5px;
+    line-height: 1.45;
+    color: var(--text3);
+}
+.gm-ad-progress {
+    height: 4px;
+    margin: 14px 0 8px;
+    border-radius: 999px;
+    background: var(--bg2);
+    overflow: hidden;
+}
+.gm-ad-progress-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 999px;
+    background: var(--accent);
+    transition: width 0.25s linear;
+}
+.gm-ad-timer {
+    font-size: 11.5px;
+    color: var(--text3);
+    text-align: center;
+    margin: 0 0 10px;
+}
+#gm-ad-claim, #gm-ad-continue { width: 100%; }
+#gm-ad-claim.hidden, #gm-ad-continue.hidden { display: none !important; }
+.gm-ad-note {
+    margin: 12px 0 0;
+    font-size: 10px;
+    line-height: 1.5;
+    color: var(--text3);
+    text-align: center;
+}
+
+/* =====================================================================
+   PROFILE PHOTO ADJUSTER
+   ===================================================================== */
+.dp-crop-box { max-width: 360px; }
+.dp-crop-viewport {
+    position: relative;
+    width: min(280px, 78vw);
+    aspect-ratio: 1 / 1;
+    margin: 4px auto 12px;
+    border-radius: 24px;
+    background: var(--bg);
+    border: 1px solid var(--border2);
+    overflow: hidden;
+    touch-action: none;
+    cursor: grab;
+}
+.dp-crop-viewport:active { cursor: grabbing; }
+.dp-crop-image {
+    position: absolute;
+    inset: 0;
+    background-repeat: no-repeat;
+    background-position: center center;
+    background-size: cover;
+    will-change: background-position, background-size;
+}
+.dp-crop-ring {
+    position: absolute;
+    /* Exactly the circle the avatar will show, so the framing previewed is the
+       framing saved (the corners are hidden by the ring's own shadow). */
+    inset: 0;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.85);
+    box-shadow: 0 0 0 2000px rgba(0, 0, 0, 0.42);
+    pointer-events: none;
+}
+.dp-crop-zoom-label {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text3);
+    margin-bottom: 4px;
+}
+.dp-crop-zoom {
+    width: 100%;
+    accent-color: var(--accent);
+    margin-bottom: 12px;
 }
