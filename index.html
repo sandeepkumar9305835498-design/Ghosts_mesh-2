@@ -15,6 +15,18 @@
     <meta name="description" content="Ghost Mesh — privacy-first, end-to-end encrypted, direct device-to-device messaging. No account, no cloud storage.">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
+    <!-- Razorpay publishable key (placeholder). Replace with your own key before
+         enabling payments. The key is read from window.GM_RAZORPAY_KEY_ID by
+         script.js, so this meta tag is the single source of truth for the web
+         build. Do not commit a live key here. -->
+    <meta name="gm-razorpay-key" content="rzp_test_TpjbsTfAoTQsBY">
+    <!-- AdMob app ID (placeholder). The app treats a missing/empty app ID as
+         "ads disabled" and quietly skips any ad surfaces instead of showing
+         broken placeholders. Replace with your own app ID before publishing. -->
+    <meta name="gm-adnetwork" content="adsense">
+    <meta name="gm-ad-client" content="ca-app-pub-8808521207954078~9122584573">
+    <meta name="gm-ad-slot" content="ca-app-pub-8808521207954078/2990123456">
+    <meta name="gm-admob-app-id" content="ca-app-pub-8808521207954078~9122584573">
     <script src="peerjs.min.js"></script>
     <link rel="stylesheet" href="leaflet.css"/>
     <!-- leaflet.js, three.min.js, qrcode.min.js and jsQR.js are NOT loaded here:

@@ -484,6 +484,13 @@ for (const fn of ["gmPrivacyMode", "gmPickPrivacyMode", "gmSyncPrivacyRow", "ope
     "closePrivacyModeSheet", "gmToggleMapInfo", "gmMapHandleResize"]) {
     if (!defined.has(fn)) privacyProblems.push(fn + "() is missing");
 }
+// gmMapHandleResize must be called from the layout/resize wiring — presence
+// alone proves nothing; the merged PR defines it and the map layout check
+// references it, so a stale definition that is never attached to the UI is
+// caught instead of silently passing.
+if (!scriptSource.includes("gmMapHandleResize()") && !scriptSource.includes("gmMapHandleResize(")) {
+    privacyProblems.push("gmMapHandleResize() is never called — the map resize handler is dead code");
+}
 for (const id of ["privacy-mode-sheet", "privacy-opt-private", "privacy-opt-public", "privacy-mode-state",
     "map-info-btn", "map-info-note", "wifi-others-caption"]) {
     if (!htmlIds.has(id)) privacyProblems.push("missing #" + id);

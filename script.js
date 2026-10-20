@@ -5,6 +5,23 @@ let userPhoneNumber = "", userGhostID = "", userDisplayName = "", userCurrentDP 
 let myPeerInstance = null;
 let activeConnections = [];
 let chatData = {};
+
+// ============ External config (read from meta tags in index.html) ============
+// These are the single source of truth for Razorpay publishable key ID and
+// AdMob app ID in the web build. Do not paste live keys into this file.
+(function () {
+    var metaRazorpay = document.querySelector('meta[name="gm-razorpay-key"]');
+    var metaAdMob = document.querySelector('meta[name="gm-admob-app-id"]');
+    window.GM_RAZORPAY_KEY_ID = (metaRazorpay && metaRazorpay.content) || "";
+    window.ADMOB_CONFIG = {
+        appId: (metaAdMob && metaAdMob.content) || "",
+        // No ad unit IDs configured yet — the ad surface treats that as disabled.
+        bannerUnitId: "",
+        interstitialUnitId: "",
+        rewardedUnitId: ""
+    };
+})();
+
 let currentChatPeer = null;
 let typingTimeout = null;
 let pendingIncomingConnection = null;
@@ -5134,6 +5151,7 @@ function gmTodayKey() {
     return d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate();
 }
 function gmAdViewsLeft() { return Math.max(0, GM_AD_DAILY_CAP - gmAdViewsToday()); }
+
 // How long a break lasts. window.GM_AD_DURATION_MS can shorten it (used by the
 // runtime checks and handy while tuning the ad slot), but the shipped default
 // is the real 15s / 5s.
