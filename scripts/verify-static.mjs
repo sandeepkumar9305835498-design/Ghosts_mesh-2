@@ -183,6 +183,19 @@ if (!/GM_NAV_SCREENS\s*=\s*\{[^}]*"chatlist-screen"\s*:\s*true[^}]*"map-screen"\
 // skip every panel and land on the last one.
 if (/scroll-snap-type\s*:/.test(css)) polishProblems.push("scroll-snap-type is set again on the tab scroller");
 if (!/--gm-nav-h/.test(css)) polishProblems.push("--gm-nav-h is not defined");
+// The bottom bar must stay a rock-solid fixed bar: never animated, never
+// translated vertically, and every item may only transition color.
+// The desktop media query also styles .gm-nav, so pick the rule that actually
+// declares the bar's positioning (the base rule).
+const navRule = (css.match(/\.gm-nav\s*\{[^}]*\}/g) || []).find(rule => /position\s*:/.test(rule)) || "";
+if (!/position\s*:\s*fixed/.test(navRule)) polishProblems.push("the bottom nav is not position:fixed");
+const navAnimation = (navRule.match(/animation\s*:\s*([^;]+)/) || [])[1];
+if (navAnimation && navAnimation.trim() !== "none") polishProblems.push("the bottom nav animates again (jitter)");
+if (/translateY|scale\(/.test(navRule)) polishProblems.push("the bottom nav moves on purpose");
+const navItemRule = (css.match(/\.gm-nav-item\s*\{[^}]*\}/) || [""])[0];
+if (/transition\s*:\s*all/.test(navItemRule)) polishProblems.push("nav items transition all properties");
+if (!/transition\s*:\s*color/.test(navItemRule)) polishProblems.push("nav items do not limit their transition to colour");
+if (!/-webkit-tap-highlight-color\s*:\s*transparent/.test(navItemRule)) polishProblems.push("nav items bring the Android tap ripple back");
 for (const screen of ["#chatlist-screen", "#profile-screen"]) {
     const rule = new RegExp("\\" + screen + "[^{]*\\{[^}]*--gm-nav-h");
     if (!rule.test(css.replace(/\n/g, " ")) && !css.includes(screen)) polishProblems.push(screen + " has no reserved nav space");
@@ -382,18 +395,23 @@ if (!/phrase-backup-veil/.test(html)) safetyProblems.push("the recovery phrase i
 check("privacy, safety and PIN hardening are wired", safetyProblems);
 
 // ----------------------------- 13. Bluetooth tab, live map, credits and photos
-// The transport panels, the full-screen map, editable profile fields, the one
-// sponsor surface and the photo adjuster all have to line up across files too.
+// The transport panels, the full-screen map, the name-only profile editor, the
+// one sponsor surface and the photo adjuster all have to line up across files.
 const extrasProblems = [];
 for (const fn of ["gmSetBluetoothScan", "gmRefreshBluetoothPeers", "gmPeersByTransport", "gmConnectNativePeer",
     "openLiveMap", "closeLiveMap", "gmMapLocateMe", "gmSyncMapPins", "gmRememberPeerLocation",
-    "saveProfilePhone", "gmProfilePhoneDirty", "gmOpenSponsoredBreak", "gmClaimSponsoredCredits",
+    "saveDisplayName", "gmProfileNameDirty", "gmOpenSponsoredBreak", "gmClaimSponsoredCredits",
     "gmCloseSponsoredBreak", "gmThemeSponsorBreak", "gmDpCropOpen", "gmDpCropApply", "gmDpCropZoom"]) {
     if (!defined.has(fn)) extrasProblems.push(fn + "() is missing");
 }
-for (const id of ["profile-phone-input", "profile-phone-save-btn", "gm-ad-screen", "gm-ad-slot",
+for (const id of ["profile-name-input", "profile-save-btn", "gm-ad-screen", "gm-ad-slot",
     "gm-ad-claim", "dp-crop-modal", "dp-crop-viewport", "dp-crop-image", "bt-scan-toggle"]) {
     if (!htmlIds.has(id)) extrasProblems.push("missing #" + id);
+}
+// The profile edits the display name only; the phone/status editors were
+// removed on purpose, so they must not creep back in.
+for (const id of ["profile-phone-input", "profile-status"]) {
+    if (htmlIds.has(id)) extrasProblems.push("#" + id + " is back on the profile screen");
 }
 if (!/const BONUS_AMOUNT = 2;/.test(scriptSource)) extrasProblems.push("the daily bonus is not 2 credits");
 if (/BONUS_AMOUNT = 5;/.test(scriptSource)) extrasProblems.push("the daily bonus is back to 5 credits");
@@ -408,7 +426,7 @@ if (!/gmPeersByTransport\("ble"\)/.test(scriptSource) || !/gmPeersByTransport\("
 }
 // The map has to be a real screen with its own container, not the old strip.
 if (!/id="map-screen"[^>]*class="app-screen/.test(html)) extrasProblems.push("the map is not an app screen");
-check("Bluetooth tab, live map, editable profile and sponsor surface are wired", extrasProblems);
+check("Bluetooth tab, live map, name-only profile and sponsor surface are wired", extrasProblems);
 
 // ------------------------------------------- 14. call screen (dialer-shaped UI)
 // Calls are the one flow a phone user compares against their dialer, so the
@@ -459,7 +477,48 @@ if (!/inset:\s*0/.test(ringCss.replace(/\n/g, " "))) {
 }
 // A refused camera asks once about a voice call instead of dropping the call.
 if (!/voice only/i.test(scriptSource)) callProblems.push("no voice-only fallback for a refused camera");
-check("call screen is dialer-shaped and survives a refused camera", callProblems);
+// Voice calls need a real audio sink: a display:none <video> is not reliable in
+// Android WebView, which is why calls connected with no sound.
+if (!htmlIds.has("remote-audio")) callProblems.push("missing #remote-audio (voice calls stay silent)");
+if (!/\.remote-audio\s*\{[^}]*\}/.test(css)) callProblems.push("the .remote-audio sink is not styled");
+if (/\n\.remote-audio\s*\{[^}]*display:\s*none/.test(css)) callProblems.push("#remote-audio must not be display:none");
+if (!/function attachRemoteStream/.test(scriptSource) || !/remote-audio/.test(scriptSource)) {
+    callProblems.push("the remote stream is not routed to the audio sink");
+}
+// PeerJS can fire 'stream' as soon as answer() is called, so the listener has
+// to be attached first or the call never shows as connected.
+if (!/listenCallStream\(call, type\);\s*\n\s*call\.answer\(stream\);/.test(scriptSource)) {
+    callProblems.push("the stream listener is registered after answer()");
+}
+if (!/function gmWatchCallConnection/.test(scriptSource)) {
+    callProblems.push("a failed RTC connection never ends the call UI");
+}
+check("call screen is dialer-shaped, audible and survives a refused camera", callProblems);
+
+// ------------------------------- 15. P2P links survive a dropped internet
+// The presence broadcast runs every 30s. It used to delete any connection whose
+// send() threw once, so a Wi-Fi blink removed a still-working WebRTC link and
+// the app looked dead offline afterwards.
+const meshProblems = [];
+if (/dead\.push|!dead\.includes\(c\)/.test(scriptSource)) {
+    meshProblems.push("a failed broadcast still prunes live connections");
+}
+if (!/myPeerInstance\.connections/.test(scriptSource)) {
+    meshProblems.push("sending has no PeerJS fallback when the tracked list is stale");
+}
+if (!/offlineWrappedChannels/.test(scriptSource)) {
+    meshProblems.push("offline channels are not tracked for resend");
+}
+if (!/if \(conn\.__offline\)/.test(scriptSource)) {
+    meshProblems.push("an online close can delete the offline transport");
+}
+if (!/dc\.readyState === "open"/.test(scriptSource)) {
+    meshProblems.push("an already-open data channel is not handled");
+}
+if (!/function gmAddIceCandidate/.test(scriptSource) || !/gmFlushIce/.test(scriptSource)) {
+    meshProblems.push("early ICE candidates are dropped instead of queued");
+}
+check("P2P links survive a dropped internet connection", meshProblems);
 
 // ---------------------------------- 15. buttons keep their own size in columns
 // `.cancel-btn { flex: 1 }` inside `.empty-state`'s column flex box stretched

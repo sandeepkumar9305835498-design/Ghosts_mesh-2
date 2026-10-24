@@ -15,10 +15,9 @@ let chatData = {};
     window.GM_RAZORPAY_KEY_ID = (metaRazorpay && metaRazorpay.content) || "";
     window.ADMOB_CONFIG = {
         appId: (metaAdMob && metaAdMob.content) || "",
-        // No ad unit IDs configured yet — the ad surface treats that as disabled.
-        bannerUnitId: "",
-        interstitialUnitId: "",
-        rewardedUnitId: ""
+        bannerUnitId: (document.querySelector('meta[name="gm-ad-slot"]') && document.querySelector('meta[name="gm-ad-slot"]').content) || "",
+        interstitialUnitId: (document.querySelector('meta[name="gm-ad-interstitial-unit"]') && document.querySelector('meta[name="gm-ad-interstitial-unit"]').content) || "",
+        rewardedUnitId: (document.querySelector('meta[name="gm-ad-rewarded-unit"]') && document.querySelector('meta[name="gm-ad-rewarded-unit"]').content) || ""
     };
 })();
 
@@ -36,7 +35,6 @@ let radarMapInstance = null;
 let userLat = 20.5937, userLng = 78.9629;
 let hasRealLocation = false; // true only once a real GPS fix is obtained — the values above are just a placeholder
 let pinBuffer = "";
-let liveLocationInterval = null;
 let callTimerInterval = null;
 let callSeconds = 0;
 let isMuted = false, isSpeaker = false;
@@ -77,6 +75,9 @@ function sendToChat(chatId, payload) {
 // renegotiation — no signaling server needed, the offer/answer/ICE just travel
 // over the already-open data channel.
 let offlinePeerConnections = {};
+// peerId -> the wrapped RTCDataChannel, so sending still works even after a
+// connection is no longer listed in activeConnections.
+let offlineWrappedChannels = {};
 let activeOfflineCallPeer = null, activeOfflineCallType = null;
 
 // ===== SAFETY FILTER =====
@@ -212,7 +213,24 @@ function gmGetUserMedia(constraints) {
         showToast("Camera/Mic need https:// or a local server — a plain file:// won't work");
         return Promise.reject(err);
     }
-    return navigator.mediaDevices.getUserMedia(constraints);
+    return navigator.mediaDevices.getUserMedia(constraints).catch(err => {
+        // Inside the APK a NotAllowedError usually means the OS permission was
+        // never granted (or was auto-revoked): ask the native side to show the
+        // system prompt instead of leaving the call dead with a generic toast.
+        if (err && (err.name === "NotAllowedError" || err.name === "SecurityError")) {
+            gmPromptNativePermissions();
+        }
+        throw err;
+    });
+}
+
+function gmPromptNativePermissions() {
+    try {
+        if (window.Android && typeof window.Android.requestPermissions === "function") {
+            window.Android.requestPermissions();
+            showToast("Allow camera and microphone, then try the call again");
+        }
+    } catch (e) { /* browser build */ }
 }
 function isInsecureMediaError(e) { return !!(e && e.insecureContext); }
 
@@ -241,6 +259,9 @@ function initApp() {
     loadTheme();
     requestPermissions();
     gmStartSessionGuard();
+    // In the APK: show the native AdMob banner straight away for free users
+    // (Premium hides it). No-op in a normal browser.
+    gmSyncAdBanner();
 }
 
 // ===== SESSION TIMEOUT =====
@@ -484,9 +505,6 @@ function updateProfileScreen() {
     document.getElementById("profile-save-btn")?.classList.add("hidden");
     const gid = document.getElementById("profile-ghost-id");
     if (gid) gid.innerText = userGhostID;
-    const ph = document.getElementById("profile-phone-input");
-    if (ph) ph.value = userPhoneNumber || "";
-    document.getElementById("profile-phone-save-btn")?.classList.add("hidden");
     const nameDisplay = document.getElementById("profile-name-display");
     if (nameDisplay) nameDisplay.innerText = userDisplayName || "Ghost";
     // Instagram-style stats row: chats on this device, credits, and the P2P
@@ -576,10 +594,34 @@ function showScreen(id, tabIndex) {
     if (t) t.classList.remove("hidden");
     gmAnimateScreen(t, id);
     gmSyncBottomNav(id);
-    if (id === "chatlist-screen") scrollToMainTab(tabIndex === undefined ? 0 : tabIndex);
+    if (id === "chatlist-screen") {
+        // Re-entering the list re-renders the peer lists once (the panel index
+        // is reset so setActiveMainTab() sees a real change), but a plain tab
+        // tap never goes through showScreen() at all.
+        gmActiveTabIndex = -1;
+        scrollToMainTab(tabIndex === undefined ? 0 : tabIndex);
+    }
 }
-function showEl(id) { const e = document.getElementById(id); if(e) e.classList.remove("hidden"); }
-function hideEl(id) { const e = document.getElementById(id); if(e) e.classList.add("hidden"); }
+function showEl(id) {
+    const e = document.getElementById(id);
+    if (e) e.classList.remove("hidden");
+    if (id === "call-screen" || id === "gm-ad-screen") gmSyncAdBanner();
+}
+function hideEl(id) {
+    const e = document.getElementById(id);
+    if (e) e.classList.add("hidden");
+    if (id === "call-screen" || id === "gm-ad-screen") gmSyncAdBanner();
+}
+
+// Keeps the native AdMob banner out of the places store policy forbids ads in
+// (an active voice/video call) and out of the rewarded-ad screen itself.
+function gmSyncAdBanner() {
+    if (!window.Android || typeof window.Android.setBannerVisible !== "function") return;
+    const onCall = !document.getElementById("call-screen")?.classList.contains("hidden");
+    const onAd = !document.getElementById("gm-ad-screen")?.classList.contains("hidden");
+    const show = !isPremiumUnlocked() && !onCall && !onAd;
+    try { window.Android.setBannerVisible(show); } catch (e) { /* no bridge */ }
+}
 
 // Scrolls a container smoothly, falling back to an instant jump where
 // Element.scrollTo({behavior}) is not implemented (a few older WebViews).
@@ -617,20 +659,24 @@ function scrollToMainTab(index) {
 
 function setActiveMainTab(index) {
     const clamped = Math.max(0, Math.min(GM_TABS.length - 1, index));
-    // The top tab bar is gone (the pill nav did the same job twice), so the
-    // scroller itself carries the state — one place to read it from, for the
-    // swipe handler, the nav and the tests.
+    const changed = gmActiveTabIndex !== clamped;
+    gmActiveTabIndex = clamped;
+    // The top tab bar is gone (the nav did the same job twice), so the scroller
+    // itself carries the state — one place to read it from, for the swipe
+    // handler, the nav and the tests.
     const scroller = document.getElementById("main-tabs-scroller");
-    if (scroller) scroller.dataset.activeTab = String(clamped);
-    // Keep the bottom pill nav's highlight in step with the panel. This runs
-    // on every scroll tick, so gmSetBottomNavActive() bails out early when the
-    // answer has not changed instead of touching the DOM each time.
-    gmSetBottomNavActive(GM_TAB_NAV_KEYS[clamped] || "chats", true);
-    // Discovery keeps changing while the app sits open, so the Online screen's
-    // list is refreshed on every panel change instead of waiting for the next
-    // discovery event (it renders into a hidden screen — cheap, and always fresh
-    // by the time the user opens it).
-    renderPeerLists();
+    if (scroller && scroller.dataset.activeTab !== String(clamped)) {
+        scroller.dataset.activeTab = String(clamped);
+    }
+    // Keep the nav highlight in step with the panel. This runs on every scroll
+    // tick, so gmSetBottomNavActive() bails out early when the answer has not
+    // changed instead of touching the DOM each time.
+    gmSetBottomNavActive(GM_TAB_NAV_KEYS[clamped] || "chats");
+    // The peer lists are rebuilt only when the panel actually changed. Doing it
+    // on every scroll event meant a smooth tab scroll rebuilt the whole list
+    // dozens of times per tap, which is what made the bar look like it was
+    // shaking on a phone.
+    if (changed) renderPeerLists();
 }
 
 // Swipe physics: the panels are no longer scroll-snap at all (see style.css).
@@ -680,26 +726,29 @@ function initMainTabsScroller() {
     window.addEventListener("mouseup", () => { if (dragging) { dragging = false; scheduleSettle(); } });
 }
 
-// ===== BOTTOM FLOATING PILL NAV =====
-// The pill nav is the only nav bar (the top tab bar was removed as a duplicate):
-// Chats, WiFi, Online, with Settings last. The two panels are swiped horizontally
-// and their scroll position drives the highlight through setActiveMainTab().
-// Profile is a sub-screen reached from Settings (or the header avatar), so this
-// still includes it — the nav stays visible there.
+// ===== BOTTOM NAVIGATION BAR =====
+// The bar is the only nav (the top tab bar was removed as a duplicate): Chats,
+// WiFi, Bluetooth, Map. The two panels are swiped horizontally and their scroll
+// position drives the highlight through setActiveMainTab().
+// Profile is a sub-screen reached from Settings (or the header avatar), so the
+// nav stays visible there.
+//
+// It is deliberately passive: the bar never animates or re-renders. A tap only
+// flips `.active` from one button to another (two classList calls), and a tab tap
+// on the chat list only changes the scroller position — the screen is not
+// re-shown and the lists are not rebuilt unless the panel actually changed.
 const GM_NAV_SCREENS = { "chatlist-screen": true, "profile-screen": true, "map-screen": true };
 let gmNavActiveKey = "";
 let gmNavReady = false;
+let gmActiveTabIndex = -1;
 
 function gmInitBottomNav() {
     const nav = document.getElementById("gm-bottom-nav");
     if (!nav) return;
     if (gmNavReady) return;                 // listeners are registered once
     gmNavReady = true;
-    // Rotation, the on-screen keyboard and a window resize all change the
-    // geometry, so the capsule is re-measured once the layout settles.
-    window.addEventListener("resize", () => gmMoveNavPill(true), { passive: true });
-    window.addEventListener("orientationchange", () => setTimeout(() => gmMoveNavPill(true), 260));
-    gmSetBottomNavActive(gmNavActiveKey || "chats", false);
+    // Nothing to re-measure: the bar is fixed and every item is a fixed 25%.
+    gmSetBottomNavActive(gmNavActiveKey || "chats");
 }
 
 function gmSetBottomNavVisible(visible) {
@@ -715,11 +764,10 @@ function gmSyncBottomNav(screenId) {
     if (!visible) return;
     // Profile keeps whatever was highlighted (it is entered from Settings, like
     // the settings sheet itself); the map is a real destination of its own.
-    if (screenId === "map-screen") gmSetBottomNavActive("map", true);
-    gmMoveNavPill(true);
+    if (screenId === "map-screen") gmSetBottomNavActive("map");
 }
 
-function gmSetBottomNavActive(key, animate) {
+function gmSetBottomNavActive(key) {
     const nav = document.getElementById("gm-bottom-nav");
     // Hot path: called on every scroll tick, so leave the DOM alone when the
     // highlight is already on the right item.
@@ -733,34 +781,14 @@ function gmSetBottomNavActive(key, animate) {
         if (on) items[i].setAttribute("aria-current", "page");
         else items[i].removeAttribute("aria-current");
     }
-    gmMoveNavPill(animate);
 }
 
-// Slides the highlight capsule onto the active item. The geometry is measured
-// from the live DOM instead of being hard-coded, so it stays correct on every
-// screen size, and it is themed (accent-tinted) rather than fixed-coloured.
-function gmMoveNavPill(animate) {
-    const nav = document.getElementById("gm-bottom-nav");
-    const pill = document.getElementById("gm-nav-pill");
-    if (!nav || !pill || !gmNavActiveKey) return;
-    const btn = nav.querySelector('.gm-nav-item[data-nav="' + gmNavActiveKey + '"]');
-    if (!btn) return;
-    const btnRect = btn.getBoundingClientRect();
-    if (!btnRect.width) return;             // nav is hidden / not laid out yet
-    const navRect = nav.getBoundingClientRect();
-    if (animate === false || pill.style.opacity !== "1") {
-        // First paint (or an explicitly instant move): place it directly
-        // instead of animating in from zero width.
-        pill.style.transition = "none";
-        requestAnimationFrame(() => { pill.style.transition = ""; });
-    }
-    // An absolutely positioned box is offset from its containing block's
-    // padding box, so the nav's own border width has to come off the delta.
-    const border = parseFloat(getComputedStyle(nav).borderLeftWidth) || 0;
-    pill.style.width = btnRect.width + "px";
-    pill.style.transform = "translateX(" + (btnRect.left - navRect.left - border) + "px)";
-    pill.style.opacity = "1";
-}
+// Kept for compatibility with older callers/checks. The highlight is now a
+// CSS pill on the active button itself (no element slides, nothing is
+// measured), so this is intentionally a no-op: reading getBoundingClientRect()
+// here on every scroll tick was forcing a synchronous layout and shaking the
+// whole bar.
+function gmMoveNavPill() { /* no-op by design — the pill never moves */ }
 
 // Single entry point for every nav item, so the highlight and the destination
 // can never drift apart (and the markup stays free of class juggling).
@@ -773,7 +801,16 @@ function gmNavGo(key) {
     if (key === "profile") { openProfile(); return; }
     if (key === "settings") { openSettingsSheet(); return; }
     const panel = GM_TAB_NAV_KEYS.indexOf(key);
-    showScreen("chatlist-screen", panel <= 0 ? 0 : panel);
+    if (panel < 0) return;
+    // Already on the chat list: only the panel and the highlight change. Going
+    // through showScreen() re-hid/re-showed every screen, forced a reflow and
+    // replayed the fade animation on each tap — the source of the shake.
+    const listScreen = document.getElementById("chatlist-screen");
+    if (listScreen && !listScreen.classList.contains("hidden")) {
+        scrollToMainTab(panel);
+        return;
+    }
+    showScreen("chatlist-screen", panel);
 }
 
 // Profile and Chat Themes are entered from the Settings sheet now, so their
@@ -896,28 +933,8 @@ function saveDisplayName() {
     showToast("Name saved!");
 }
 
-// Phone is editable from the same place as the name. It is stored only on this
-// device and is never part of the Ghost ID, so changing it cannot break the
-// identity or a recovery phrase.
-function gmProfilePhoneDirty() {
-    document.getElementById("profile-phone-save-btn")?.classList.remove("hidden");
-}
-function saveProfilePhone() {
-    const el = document.getElementById("profile-phone-input");
-    const raw = el ? el.value.trim() : "";
-    if (raw && raw.replace(/\D/g, "").length < 6) { showToast("That phone number looks incomplete"); return; }
-    userPhoneNumber = raw;
-    if (raw) safeStorage.set("gm_phone", raw); else safeStorage.del("gm_phone");
-    if (el) el.value = raw;
-    document.getElementById("profile-phone-save-btn")?.classList.add("hidden");
-    showToast(raw ? "Phone number saved!" : "Phone number removed");
-}
-
-function saveStatus() {
-    const s = document.getElementById("profile-status").value;
-    broadcastToMesh({ type: "status-update", sender: userGhostID, status: s });
-    if (s === "invisible") { isGhostMode = true; document.getElementById("ghost-mode-label").innerText = "Ghost Mode: On"; }
-}
+// The profile screen now edits the display name only — the phone/status
+// editors (and their handlers) were removed with the fields.
 
 function copyGhostID() {
     navigator.clipboard?.writeText(userGhostID).then(() => showToast("Ghost ID copied!")).catch(() => showToast(userGhostID));
@@ -1436,16 +1453,20 @@ window.gmApplyNativeStatus = function (message) {
 // handler below) — used to pick a deterministic fallback suffix.
 let peerIdRetries = 0;
 
+// One STUN list for every RTCPeerConnection the app builds (online PeerJS
+// calls and offline QR/Wi-Fi calls). Without it phones behind carrier-grade
+// NAT never learn a public candidate, ICE never completes, and the call drops
+// the moment it is answered.
+const GM_ICE_SERVERS = [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:global.stun.twilio.com:3478" }
+];
+
 function initMesh() {
     try {
         myPeerInstance = new Peer(userGhostID, {
-            config: {
-                iceServers: [
-                    { urls: "stun:stun.l.google.com:19302" },
-                    { urls: "stun:stun1.l.google.com:19302" },
-                    { urls: "stun:global.stun.twilio.com:3478" }
-                ]
-            },
+            config: { iceServers: GM_ICE_SERVERS },
             debug: 0
         });
         myPeerInstance.on('open', id => {
@@ -1732,6 +1753,7 @@ function setupConn(conn) {
                     if (pc) {
                         try {
                             await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+                            gmFlushIce(pc);
                             updateCallStatusLabel("Connected");
                             startCallTimer();
                         } catch(e) { console.error(e); }
@@ -1740,8 +1762,7 @@ function setupConn(conn) {
                 break;
 
             case "voip-ice":
-                { const pc = offlinePeerConnections[conn.peer];
-                  if (pc && data.candidate) pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(()=>{}); }
+                gmAddIceCandidate(offlinePeerConnections[conn.peer], data.candidate);
                 break;
 
             case "voip-end":
@@ -1759,7 +1780,14 @@ function setupConn(conn) {
         updateOnlineUsers(conn.peer, conn.peer, false);
         renderChatList();
         if (activeOfflineCallPeer === conn.peer) endCallFlow();
-        delete offlinePeerConnections[conn.peer];
+        // Only tear down the offline transport when the OFFLINE link itself
+        // closed. An online PeerJS connection closing for the same Ghost ID used
+        // to delete the still-working QR/Wi-Fi connection, which killed offline
+        // chat and calls after the internet dropped.
+        if (conn.__offline) {
+            delete offlinePeerConnections[conn.peer];
+            delete offlineWrappedChannels[conn.peer];
+        }
     });
 }
 
@@ -2307,9 +2335,12 @@ function switchOfflineTab(tab) {
 }
 
 function offlineIceConfig() {
-    // No STUN/TURN — we only want local network (host) candidates since
-    // this feature is specifically for "no internet" same-WiFi use.
-    return { iceServers: [] };
+    // This feature is specifically for "no internet" same-Wi-Fi use, so with no
+    // connection the browser gathers host candidates only (which is exactly
+    // what the LAN handshake needs). When the phone IS online the same STUN
+    // list is used, so a QR/Wi-Fi pairing also gets usable candidates through
+    // carrier NAT and can call over mobile data.
+    return { iceServers: navigator.onLine ? GM_ICE_SERVERS : [] };
 }
 
 // Real-world phones often have several active network interfaces (WiFi,
@@ -2320,12 +2351,28 @@ function offlineIceConfig() {
 // for same-WiFi connections, we keep just the first few candidates before
 // encoding into the QR — the local RTCPeerConnection itself still has its
 // FULL candidate list internally, only what we transmit gets trimmed.
-function trimSdpForQR(sdp, maxCandidates = 3) {
-    let kept = 0;
-    return sdp.split("\r\n").filter(line => {
-        if (line.startsWith("a=candidate")) return ++kept <= maxCandidates;
-        return true;
-    }).join("\r\n");
+function trimSdpForQR(sdp, maxCandidates = 5) {
+    const lines = sdp.split("\r\n");
+    const candidates = lines.filter(l => l.startsWith("a=candidate"));
+    if (candidates.length <= maxCandidates) return sdp;
+    // Prefer a real LAN IPv4 host candidate over mDNS ("*.local") or IPv6:
+    // many routers/hotspots block multicast DNS, so a QR that only carried
+    // mDNS candidates produced a "Connected!"-less handshake that never opened.
+    const score = line => {
+        const ip = (line.match(/candidate:\S+ \d+ \S+ \d+ (\S+)/) || [])[1] || "";
+        const isIPv4 = /^\d{1,3}(\.\d{1,3}){3}$/.test(ip);
+        const isMdns = /\.local$/i.test(ip);
+        const isHost = / typ host/.test(line);
+        return (isHost ? 0 : 10) + (isMdns ? 5 : 0) + (isIPv4 ? 0 : 3);
+    };
+    const kept = candidates.slice().sort((a, b) => score(a) - score(b)).slice(0, maxCandidates);
+    let i = 0;
+    const out = [];
+    for (const line of lines) {
+        if (!line.startsWith("a=candidate")) { out.push(line); continue; }
+        if (i < kept.length) out.push(kept[i++]);
+    }
+    return out.join("\r\n");
 }
 function slimSessionDescription(desc) {
     return { type: desc.type, sdp: trimSdpForQR(desc.sdp) };
@@ -2354,17 +2401,30 @@ function wrapOfflineChannel(dc, peerId) {
     const listeners = {};
     const wrapped = {
         peer: peerId,
-        open: false,
+        open: dc.readyState === "open",
+        __offline: true,
         on(event, cb) { (listeners[event] = listeners[event] || []).push(cb); },
         send(data) { if (dc.readyState === "open") dc.send(JSON.stringify(data)); },
         close() { try { dc.close(); } catch(e){} }
     };
-    dc.onopen = () => { wrapped.open = true; (listeners.open || []).forEach(f => f()); };
+    const fire = (event, arg) => (listeners[event] || []).forEach(f => {
+        try { f(arg); } catch (e) { console.error("Offline channel listener failed:", e); }
+    });
+    dc.onopen = () => { wrapped.open = true; fire("open"); };
     dc.onmessage = e => {
         let data; try { data = JSON.parse(e.data); } catch(err) { return; }
-        (listeners.data || []).forEach(f => f(data));
+        fire("data", data);
     };
-    dc.onclose = () => { wrapped.open = false; (listeners.close || []).forEach(f => f()); };
+    dc.onclose = () => {
+        wrapped.open = false;
+        if (offlineWrappedChannels[wrapped.peer] === wrapped) delete offlineWrappedChannels[wrapped.peer];
+        fire("close");
+    };
+    // The channel can already be open by the time this wrapper is created (the
+    // join side gets it from the 'datachannel' event). In that case onopen will
+    // never fire — replay it, otherwise the connection was never registered and
+    // "Open Chat" had nothing to open.
+    if (wrapped.open) setTimeout(() => fire("open"), 0);
     return wrapped;
 }
 
@@ -2498,6 +2558,8 @@ async function gmHandleQrImage(event) {
 // ----- HOST (creator) side -----
 async function startOfflineHost() {
     gmCloseOfflineFlowSoonIfIdle();
+    finishOfflineConnectPeerId = null;
+    offlineWrapped = null;
     showEl("offline-flow-wrap");
     if (typeof QRCode === "undefined") {
         // Lazy-loaded on first use; the file is local (and service-worker
@@ -2575,12 +2637,33 @@ function setupOfflineDataChannel(dc, knownPeerId, pcRef) {
     // synchronously, right here, before the channel can possibly open.
     setupConn(wrapped);
     offlineWrapped = wrapped;
-    dc.addEventListener("open", () => {
+    offlineWrappedChannels[wrapped.peer] = wrapped;
+
+    // Both phones must be on the same Wi-Fi or hotspot. If the link never opens,
+    // say so instead of leaving the panel on "Waiting..." forever.
+    const slowTimer = setTimeout(() => {
+        if (!wrapped.open) {
+            showToast("Still connecting — both phones must be on the same Wi-Fi or hotspot");
+        }
+    }, 15000);
+
+    const onReady = () => {
+        clearTimeout(slowTimer);
         if (pcRef) offlinePeerConnections[wrapped.peer] = pcRef;
+        offlineWrappedChannels[wrapped.peer] = wrapped;
         stopOfflineCamera();
         finishOfflineConnectPeerId = wrapped.peer;
         showOfflineConnectedScreen(offlinePendingPeerInfo?.name || wrapped.peer);
-    });
+        // Open the chat by itself a moment after the success screen appears.
+        // The old "Open Chat" button silently did nothing when the peer id was
+        // still the placeholder, which looked like “scan hua par chat nahi khula”.
+        setTimeout(() => {
+            if (finishOfflineConnectPeerId === wrapped.peer) finishOfflineConnect();
+        }, 900);
+    };
+    // Already open? The event will never come.
+    if (dc.readyState === "open") setTimeout(onReady, 0);
+    else dc.addEventListener("open", onReady);
     return wrapped;
 }
 
@@ -2606,15 +2689,28 @@ function showOfflineConnectedScreen(peerName) {
 }
 
 function finishOfflineConnect() {
-    const peerId = finishOfflineConnectPeerId;
+    // Prefer the id learned when the channel opened, then the live wrapper, then
+    // the only known offline peer. This makes the button work even if it is
+    // tapped in the same tick the connection finished.
+    const liveOfflinePeers = Object.keys(offlinePeerConnections || {});
+    const peerId = finishOfflineConnectPeerId
+        || (offlineWrapped && offlineWrapped.open ? offlineWrapped.peer : null)
+        || (liveOfflinePeers.length === 1 ? liveOfflinePeers[0] : null);
     scrollToMainTab(0);
     resetOfflinePanels();
     hideEl("offline-flow-wrap");
-    if (peerId) openChat(peerId);
+    if (peerId && peerId !== "offline-pending") {
+        finishOfflineConnectPeerId = null;
+        openChat(peerId);
+        return;
+    }
+    showToast("Not connected yet — finish both QR scans first");
 }
 
 // ----- JOIN (scanner) side -----
 function startOfflineJoinScan() {
+    finishOfflineConnectPeerId = null;
+    offlineWrapped = null;
     showEl("offline-flow-wrap");
     document.getElementById("offline-join-step1").querySelector(".primary-btn")?.classList.add("hidden");
     startCameraScan(async decoded => {
@@ -3410,22 +3506,20 @@ function setSelfDestruct(s) {
 }
 
 function broadcastToMesh(obj) {
-    const dead = [];
     activeConnections.forEach(c => {
+        if (!c || c.open === false) return;
         try {
-            if (c?.open) c.send(obj);
+            c.send(obj);
         } catch (e) {
-            // One bad connection must never stop the message reaching
-            // everyone else.
-            console.error("Send failed to", c?.peer, e);
-            dead.push(c);
+            // NEVER drop the connection here. The presence broadcast runs every
+            // 30s; a single transient send error (WebView backgrounded, mobile
+            // data blip, Wi-Fi handover) used to delete a perfectly working P2P
+            // link from activeConnections. After that every message and call
+            // looked for a connection that was no longer tracked — which is why
+            // the app appeared to die as soon as the internet was switched off.
+            console.warn("Presence broadcast failed for", c.peer, e);
         }
     });
-    // Prune connections that just proved themselves dead so future
-    // broadcasts don't keep failing on them.
-    if (dead.length) {
-        activeConnections = activeConnections.filter(c => !dead.includes(c));
-    }
 }
 
 // ===== TYPING =====
@@ -3618,52 +3712,9 @@ function renderDeleteLocal(msgId) {
 }
 
 // ===== CHAT MENU ACTIONS =====
-// Live location is OFF by default: nothing is read or sent until the person
-// confirms a share, it updates once a minute, and it stops by itself after 15
-// minutes (or immediately when the same menu item is tapped again).
-const GM_LIVE_LOCATION_MS = 15 * 60 * 1000;
-let gmLiveLocationTimer = null;
-let gmLiveLocationStopTimer = null;
-let gmLiveLocationPeer = null;
-function gmSendLiveLocationPing(first) {
-    if (!gmLiveLocationPeer || !navigator.geolocation) return;
-    const chatId = gmLiveLocationPeer;
-    navigator.geolocation.getCurrentPosition(pos => {
-        const lat = pos.coords.latitude, lng = pos.coords.longitude;
-        sendToChat(chatId, { type: "location", sender: userGhostID, senderName: userDisplayName, lat, lng, senderDP: userCurrentDP, groupId: isGroupChat(chatId) ? chatId : undefined });
-        if (!chatData[chatId]) initChatData(chatId);
-        const lm = { id: "loc-"+Date.now(), sender: userGhostID, text: "", direction: "outgoing", dp: userCurrentDP, contentType: "location", mediaPayload: { lat, lng }, time: nowTime() };
-        chatData[chatId].messages.push(lm);
-        if (currentChatPeer === chatId) renderMessage(lm);
-        if (first) showToast("Live location on for 15 min — tap Share Location again to stop");
-    }, () => {
-        if (first) { showToast("Location permission denied"); stopLiveLocation(true); }
-    }, { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 });
-}
-function stopLiveLocation(silent) {
-    if (gmLiveLocationTimer) clearInterval(gmLiveLocationTimer);
-    if (gmLiveLocationStopTimer) clearTimeout(gmLiveLocationStopTimer);
-    gmLiveLocationTimer = null;
-    gmLiveLocationStopTimer = null;
-    gmLiveLocationPeer = null;
-    liveLocationInterval = null;
-    if (!silent) showToast("Live location stopped");
-}
-function shareLiveLocation() {
-    closeAllMenus();
-    if (!currentChatPeer) { showToast("Open a chat first"); return; }
-    if (gmLiveLocationTimer) { stopLiveLocation(false); return; }
-    const chatId = currentChatPeer;
-    gmConfirm("Share your live location with this chat for 15 minutes? It is off by default — nothing is read or sent until you allow it.", () => {
-        gmLiveLocationPeer = chatId;
-        gmSendLiveLocationPing(true);
-        liveLocationInterval = gmLiveLocationTimer = setInterval(() => gmSendLiveLocationPing(false), 60000);
-        gmLiveLocationStopTimer = setTimeout(() => {
-            stopLiveLocation(true);
-            showToast("Live location sharing ended");
-        }, GM_LIVE_LOCATION_MS);
-    }, { title: "Share live location", confirmLabel: "Share for 15 min" });
-}
+// Continuous ("live") location sharing was removed on purpose: app stores
+// treat background location sharing in an anonymous chat app as high risk.
+// The radar map still offers a one-time, opt-in position when the user opens it.
 function clearCurrentChat() {
     closeAllMenus();
     if (!currentChatPeer) return;
@@ -4017,20 +4068,54 @@ function toggleCallVideoUI(hasVideo) {
 }
 
 function sendToPeer(peerId, payload) {
+    if (!peerId) return;
     const conn = activeConnections.find(c => c.peer === peerId);
-    if (conn && conn.open) conn.send(payload);
+    if (conn && conn.open !== false) {
+        try { conn.send(payload); return; } catch (e) {
+            console.warn("sendToPeer failed on the tracked connection:", peerId, e);
+        }
+    }
+    // Fallback: the connection may still be alive inside PeerJS even after it
+    // was dropped from activeConnections (a single failed broadcast used to do
+    // exactly that). Without this, chat died the moment the internet blinked
+    // even though the P2P data channel was still open.
+    const live = myPeerInstance && myPeerInstance.connections
+        ? (myPeerInstance.connections[peerId] || [])
+        : [];
+    for (const c of [].concat(live)) {
+        if (!c || typeof c.send !== "function" || c.open === false) continue;
+        try {
+            c.send(payload);
+            if (!activeConnections.some(x => x.peer === peerId)) activeConnections.push(c);
+            return;
+        } catch (e) {
+            console.warn("sendToPeer fallback failed:", peerId, e);
+        }
+    }
+    // Last resort for offline (QR/Wi-Fi) links.
+    const wrapped = Object.values(offlineWrappedChannels || {}).find(w => w && w.peer === peerId && w.open);
+    if (wrapped) {
+        try { wrapped.send(payload); } catch (e) { console.warn("sendToPeer offline fallback failed:", e); }
+    }
 }
 
 // ----- Entry point: routes to online (PeerJS) or offline (raw WebRTC) calling ----
 function initiateP2PCall(type) {
-    if (activeConnections.length === 0) { showToast("Connect to a peer first!"); return; }
-    const target = currentChatPeer || activeConnections[0].peer;
-    if (offlinePeerConnections[target]) { startOfflineCall(target, type); return; }
+    const target = currentChatPeer
+        || (activeConnections.find(c => c && c.open !== false) || {}).peer
+        || Object.keys(offlinePeerConnections || {})[0]
+        || null;
+    if (!target) { showToast("Connect to a peer first!"); return; }
+
+    // An offline (QR/Wi-Fi) link is a real RTCPeerConnection, so it works even
+    // with no internet at all — always prefer it over the PeerJS path.
+    const offlinePc = offlinePeerConnections[target];
+    if (offlinePc && offlinePc.signalingState !== "closed") { startOfflineCall(target, type); return; }
 
     // Online calling rides the signalling socket. Without it the old code threw
     // inside a promise chain, which the app only surfaced as a generic
     // "something went wrong" toast.
-    if (!myPeerInstance || typeof myPeerInstance.call !== "function") {
+    if (!myPeerInstance || !myPeerInstance.open || typeof myPeerInstance.call !== "function") {
         showToast("Online calling is not connected — pair over WiFi, or try again once the signal is up");
         return;
     }
@@ -4046,7 +4131,17 @@ function gmPlaceOnlineCall(target, type) {
         localMediaStream = stream;
         openCallUI(target, type, type === 'video' ? "Video Calling..." : "Voice Calling...");
         if (type === 'video') document.getElementById("local-video").srcObject = stream;
-        activeP2PCallInstance = myPeerInstance.call(target, stream, { metadata: { type } });
+        try {
+            activeP2PCallInstance = myPeerInstance.call(target, stream, { metadata: { type } });
+        } catch (callErr) {
+            // Signalling threw (peer gone / socket closed). Previously this was
+            // caught by the media handler below and misreported as a camera
+            // problem.
+            console.error("PeerJS call failed:", callErr);
+            showToast("Could not reach that peer — reconnect and try again");
+            endCallFlow();
+            return;
+        }
         listenCallStream(activeP2PCallInstance, type);
         playRingtone('ring');
     }).catch(e => {
@@ -4062,18 +4157,27 @@ function gmPlaceOnlineCall(target, type) {
 }
 
 function listenCallStream(callObj, type) {
+    let handled = false;
+    const isThisCall = () => activeP2PCallInstance === callObj || pendingIncomingCallEvent === callObj;
     callObj.on('stream', remoteStream => {
+        if (handled) return;
+        handled = true;
         stopRingtone();
         playRingtone('connect');
         updateCallStatusLabel("Connected");
-        const remoteVideo = document.getElementById("remote-video");
-        remoteVideo.srcObject = remoteStream;
-        remoteVideo.play().catch(()=>{});
-        toggleCallVideoUI(remoteStream.getVideoTracks().length > 0);
+        attachRemoteStream(remoteStream);
         startCallTimer();
     });
-    callObj.on('close', endCallFlow);
-    callObj.on('error', endCallFlow);
+    // Only the call that is actually on screen may tear the call UI down. A
+    // late 'close' from an earlier attempt used to fire endCallFlow() on the
+    // new call — the "Call ended" flash right after answering.
+    callObj.on('close', () => { if (isThisCall()) endCallFlow(); });
+    callObj.on('error', err => {
+        console.error("Call error:", err);
+        if (!isThisCall()) return;
+        showToast("Call failed — " + ((err && err.message) ? err.message : "connection error"));
+        endCallFlow();
+    });
 }
 
 // Runs when a PeerJS (online) call arrives. Previously this blindly
@@ -4120,7 +4224,7 @@ function handleIncomingCall(call) {
 // that data channel. -----
 async function startOfflineCall(peerId, type) {
     const pc = offlinePeerConnections[peerId];
-    if (!pc) { showToast("Peer connection not found"); return; }
+    if (!pc || pc.signalingState === "closed") { showToast("Peer connection not found"); return; }
 
     // Same camera fallback as the online path: a refused video camera asks
     // whether to carry on with voice instead of killing the call silently.
@@ -4142,31 +4246,110 @@ async function startOfflineCall(peerId, type) {
 
     try {
         localMediaStream = stream;
+        // Open the call screen BEFORE signalling. The answer can arrive while
+        // the offer is still in flight, and openCallUI() resets the remote video
+        // to hidden — which used to wipe the first frames of an offline call and
+        // leave the caller on the avatar screen with no media.
+        openCallUI(peerId, type, type === 'video' ? "Video Calling..." : "Voice Calling...");
+        activeOfflineCallPeer = peerId; activeOfflineCallType = type;
+
         stream.getTracks().forEach(t => pc.addTrack(t, stream));
-        pc.ontrack = event => {
-            attachRemoteStream(event.streams[0]);
-            toggleCallVideoUI(event.streams[0].getVideoTracks().length > 0);
-        };
+        pc.ontrack = event => attachRemoteStream(gmTrackToStream(event));
         pc.onicecandidate = e => { if (e.candidate) sendToPeer(peerId, { type: "voip-ice", candidate: e.candidate }); };
+        gmWatchCallConnection(pc);
 
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         sendToPeer(peerId, { type: "voip-offer", sdp: pc.localDescription, callType: type });
-
-        openCallUI(peerId, type, type === 'video' ? "Video Calling..." : "Voice Calling...");
-        activeOfflineCallPeer = peerId; activeOfflineCallType = type;
         playRingtone('ring');
     } catch(e) {
         // Anything left here is the offer/ICE side, not permissions.
         console.error(e);
         showToast("Could not start the call");
+        endCallFlow();
     }
 }
 
+// Puts the remote media where it can actually be heard/seen.
+// A voice call used to attach its audio to the <video> element, which is
+// display:none during voice calls — in Android WebView that is not a reliable
+// audio sink, so the call connected and stayed silent. Voice now plays through
+// a real <audio id="remote-audio">; video keeps the full-screen <video>.
+// ICE candidates can arrive before the remote description is applied (that is
+// normal for trickle ICE). addIceCandidate() throws InvalidStateError in that
+// window and the old code swallowed it, losing the candidate — the call then
+// rang, "connected", and never carried audio or video. Queue and flush instead.
+function gmAddIceCandidate(pc, candidate) {
+    if (!pc || !candidate) return;
+    if (!pc.remoteDescription) {
+        (pc.__gmPendingIce = pc.__gmPendingIce || []).push(candidate);
+        return;
+    }
+    pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+}
+function gmFlushIce(pc) {
+    if (!pc || !pc.remoteDescription || !pc.__gmPendingIce) return;
+    const queued = pc.__gmPendingIce;
+    pc.__gmPendingIce = [];
+    queued.forEach(c => pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {}));
+}
+
+function gmTrackToStream(event) {
+    if (event && event.streams && event.streams[0]) return event.streams[0];
+    if (event && event.track) return new MediaStream([event.track]);
+    return null;
+}
+
 function attachRemoteStream(stream) {
+    if (!stream) return false;
+    const hasVideo = stream.getVideoTracks().length > 0;
     const remoteVideo = document.getElementById("remote-video");
-    remoteVideo.srcObject = stream;
-    remoteVideo.play().catch(()=>{});
+    const remoteAudio = document.getElementById("remote-audio");
+    if (hasVideo) {
+        if (remoteAudio) remoteAudio.srcObject = null;
+        if (remoteVideo) {
+            remoteVideo.srcObject = stream;
+            remoteVideo.play().catch(()=>{});
+        }
+    } else {
+        if (remoteVideo) remoteVideo.srcObject = null;
+        if (remoteAudio) {
+            remoteAudio.srcObject = stream;
+            remoteAudio.play().catch(()=>{});
+        }
+    }
+    toggleCallVideoUI(hasVideo);
+    return hasVideo;
+}
+
+// Ends a call whose ICE/DTLS connection died instead of leaving the caller on a
+// silent "Calling…" screen until the 45s timeout.
+function gmWatchCallConnection(pc) {
+    if (!pc || typeof pc.addEventListener !== "function") return;
+    let failedTimer = null;
+    const watch = () => {
+        if (pc.connectionState === "connected") {
+            clearTimeout(failedTimer);
+            failedTimer = null;
+            return;
+        }
+        if (pc.connectionState !== "failed") return;
+        // A single "failed" tick is often transient (screen off, a Wi-Fi roam,
+        // the first ICE pair timing out). Restart ICE once and only give up if
+        // the connection is still dead after the grace period — the old code
+        // ended the call on the very first "failed" event.
+        if (failedTimer) return;
+        try { if (typeof pc.restartIce === "function") pc.restartIce(); } catch (e) { /* older WebView */ }
+        failedTimer = setTimeout(() => {
+            failedTimer = null;
+            if (pc.connectionState === "failed" || pc.iceConnectionState === "failed") {
+                showToast("Call connection lost");
+                endCallFlow();
+            }
+        }, 7000);
+    };
+    pc.addEventListener("connectionstatechange", watch);
+    pc.addEventListener("iceconnectionstatechange", watch);
 }
 
 async function acceptIncomingCall() {
@@ -4181,7 +4364,14 @@ async function acceptIncomingCall() {
         showToast("That call already ended");
         return;
     }
-    if (!call.offline && call.open === false) {
+    // PeerJS's MediaConnection.open is false until THIS device answers — using
+    // it as a "caller hung up" check ended every incoming call the instant
+    // Accept was tapped ("That call already ended"). A caller that really gave
+    // up arrives as a 'close' event (handled in handleIncomingCall), and a peer
+    // connection that is genuinely gone reports it in its signalling state.
+    const incomingPc = call.peerConnection;
+    if (!call.offline && incomingPc &&
+            (incomingPc.signalingState === "closed" || incomingPc.connectionState === "closed")) {
         pendingIncomingCallEvent = null;
         pendingIncomingCallInfo = null;
         endCallFlow();
@@ -4248,13 +4438,12 @@ async function acceptIncomingCall() {
         }
         try {
             stream.getTracks().forEach(t => pc.addTrack(t, stream));
-            pc.ontrack = event => {
-                attachRemoteStream(event.streams[0]);
-                toggleCallVideoUI(event.streams[0].getVideoTracks().length > 0);
-            };
+            pc.ontrack = event => attachRemoteStream(gmTrackToStream(event));
             pc.onicecandidate = e => { if (e.candidate) sendToPeer(peerId, { type: "voip-ice", candidate: e.candidate }); };
+            gmWatchCallConnection(pc);
 
             await pc.setRemoteDescription(new RTCSessionDescription(call.sdp));
+            gmFlushIce(pc);
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             sendToPeer(peerId, { type: "voip-answer", sdp: pc.localDescription });
@@ -4277,8 +4466,16 @@ async function acceptIncomingCall() {
     }
 
     try {
-        call.answer(stream);
+        // Register the stream listener BEFORE answering: PeerJS can fire
+        // 'stream' as soon as the answer is sent, and the old order attached the
+        // listener afterwards — the call connected but the app never saw the
+        // media, so it stayed on "Calling…" and timed out.
         listenCallStream(call, type);
+        call.answer(stream);
+        // The answered call is now the live one: endCurrentCall() can close it,
+        // the camera switch can find its RTCPeerConnection, and a late 'close'
+        // from some older connection can no longer be mistaken for this one.
+        activeP2PCallInstance = call;
         pendingIncomingCallInfo = null;
     } catch (e) {
         console.error("Answering the call failed:", e);
@@ -4396,6 +4593,8 @@ function endCallFlow() {
     gmToggleCallMore(false);
     document.getElementById("remote-video").srcObject = null;
     document.getElementById("remote-video").classList.add("hidden");
+    const remoteAudioEl = document.getElementById("remote-audio");
+    if (remoteAudioEl) remoteAudioEl.srcObject = null;
     document.getElementById("local-video").srcObject = null;
     document.getElementById("local-video").classList.add("hidden");
     document.getElementById("call-dp-fallback").classList.remove("hidden");
@@ -5008,9 +5207,31 @@ function setCredits(n) {
 function addCredits(n) {
     setCredits(getCredits() + n);
 }
+// Premium now has an expiry date (set by Razorpay activation in
+// gmActivatePremiumPlan). Every check goes through this one function, so an
+// expired plan downgrades itself the first time the app asks — coins and ads
+// come back automatically, no menu needed.
+function gmPremiumExpiry() {
+    if (!userGhostID) return 0;
+    return parseInt(safeStorage.get("gm_premium_expiry_" + userGhostID) || "0", 10) || 0;
+}
 function isPremiumUnlocked() {
     if (!userGhostID) return false;
-    return safeStorage.get("gm_premium_" + userGhostID) === "1";
+    if (safeStorage.get("gm_premium_" + userGhostID) !== "1") return false;
+    const expiry = gmPremiumExpiry();
+    if (expiry > 0 && Date.now() > expiry) {
+        // Plan finished: back to a free user, cleanly.
+        safeStorage.set("gm_premium_" + userGhostID, "0");
+        safeStorage.set("gm_premium_expiry_" + userGhostID, "0");
+        return false;
+    }
+    return true;
+}
+// Days left on the plan (0 = today is the last day, -1 = no expiry stored).
+function gmPremiumDaysLeft() {
+    const expiry = gmPremiumExpiry();
+    if (expiry <= 0) return -1;
+    return Math.max(0, Math.ceil((expiry - Date.now()) / 86400000));
 }
 function setPremiumUnlocked() {
     if (!userGhostID) return;
@@ -5068,7 +5289,21 @@ function renderCreditsUI() {
     }
 
     const profilePremiumLabel = document.getElementById("profile-premium-label");
-    if (profilePremiumLabel) profilePremiumLabel.innerText = isPremiumUnlocked() ? "Premium active" : "Premium";
+    if (profilePremiumLabel) {
+        const daysLeft = gmPremiumDaysLeft();
+        if (!isPremiumUnlocked()) {
+            profilePremiumLabel.innerText = "Premium";
+        } else if (daysLeft >= 0 && daysLeft <= 3) {
+            profilePremiumLabel.innerText = "Premium expires in " + daysLeft
+                + (daysLeft === 1 ? " day" : " days") + " — renew now";
+        } else {
+            profilePremiumLabel.innerText = "Premium active";
+        }
+    }
+
+    // In the APK the banner is a native AdMob view under the page. Free users
+    // see it, Premium users do not, and never during a call.
+    gmSyncAdBanner();
 
     // Highlight the currently active plan (if any) in the plans grid
     document.querySelectorAll(".premium-plan-btn").forEach(btn => btn.classList.remove("plan-active"));
@@ -5130,9 +5365,22 @@ function gmAdMeta(name) {
     const el = document.querySelector('meta[name="' + name + '"]');
     return el ? String(el.content || "").trim() : "";
 }
+// Inside the APK, window.Android is the native AdMob bridge. Native ads are
+// the only kind Google allows inside a WebView, so they take priority.
+function gmNativeAdsAvailable() {
+    try {
+        return !!(window.Android && typeof window.Android.isNativeAdsAvailable === "function"
+            && window.Android.isNativeAdsAvailable());
+    } catch (e) { return false; }
+}
 function gmAdNetwork() {
+    if (gmNativeAdsAvailable()) return "native";
+    // AdSense needs a real AdSense publisher id (ca-pub-...) and a numeric
+    // data-ad-slot. AdMob ids (ca-app-pub-.../unit) are NOT valid here, which
+    // is the usual reason an "AdSense" slot renders nothing.
     const network = gmAdMeta("gm-ad-network").toLowerCase();
-    if (network === "adsense" && gmAdMeta("gm-ad-client") && gmAdMeta("gm-ad-slot")) return "adsense";
+    if (network === "adsense" && /^ca-pub-\d+$/.test(gmAdMeta("gm-ad-client"))
+            && /^\d{6,12}$/.test(gmAdMeta("gm-ad-slot"))) return "adsense";
     if (gmAdMeta("gm-ad-html-url")) return "custom";
     return "house";
 }
@@ -5175,7 +5423,13 @@ function gmRenderAdSlot() {
     const network = gmAdNetwork();
     slot.innerHTML = "";
     if (tag) tag.innerText = network === "house" ? "House ad" : "Sponsored";
-    if (network === "adsense") {
+    if (network === "native") {
+        slot.innerHTML = '<div class="gm-ad-house">'
+            + '<div class="gm-ad-house-mark">Google AdMob</div>'
+            + '<p>A short sponsored video opens in the app. Watch it fully to earn credits.</p>'
+            + '<span class="gm-ad-house-note">Served by Google AdMob inside the Android app.</span>'
+            + '</div>';
+    } else if (network === "adsense") {
         const ins = document.createElement("ins");
         ins.className = "adsbygoogle";
         ins.style.display = "block";
@@ -5216,11 +5470,57 @@ function gmRenderAdSlot() {
 }
 
 // mode "earn" → rewarded (15s, then +2 credits). mode "theme" → 5s break.
+// True while a native rewarded video is opening, so a double tap cannot ask
+// AdMob for two ads at once.
+let gmNativeAdOpening = false;
+
+// Called by MainActivity.java after the user finishes a native rewarded ad.
+window.gmOnRewardedAdCompleted = function (amount) {
+    gmNativeAdOpening = false;
+    if (!userGhostID) return;
+    if (gmAdViewsLeft() <= 0) { showToast("Daily sponsor limit reached — come back tomorrow"); return; }
+    // The AdMob unit may be configured with any reward amount; the app always
+    // pays at least the advertised +2 so the UI can never under-deliver.
+    const reward = Math.max(GM_AD_REWARD, parseInt(amount, 10) || 0);
+    gmRegisterAdView();
+    addCredits(reward);
+    renderCreditsUI();
+    showToast("+" + reward + " credits added — thanks for watching");
+};
+window.gmOnAdUnavailable = function () {
+    gmNativeAdOpening = false;
+    showToast("Ad is loading — try again in a moment");
+};
+window.gmOnAdFailed = function () {
+    gmNativeAdOpening = false;
+    showToast("Ad could not load — check your internet and try again");
+};
+// Called by MainActivity.java when the rewarded screen closes, whether it was
+// watched to the end or skipped. Without this a skipped ad left the guard set
+// and every later "Earn Credits" tap was silently ignored.
+window.gmOnAdClosed = function () {
+    gmNativeAdOpening = false;
+};
+
 function gmOpenSponsoredBreak(mode) {
     closeAllMenus();
     if (mode === "earn" && !userGhostID) { showToast("Create your Ghost ID first to start earning credits"); return; }
     if (mode === "earn" && gmAdViewsLeft() <= 0) {
         showToast("Daily sponsor limit reached — come back tomorrow");
+        return;
+    }
+    // Native AdMob rewarded video: the video is a real full-screen ad owned by
+    // the OS, so the page steps out of the way and the reward arrives through
+    // gmOnRewardedAdCompleted(). The 15s HTML timer stays for the web build.
+    if (mode === "earn" && gmNativeAdsAvailable()) {
+        if (gmNativeAdOpening) return;
+        gmNativeAdOpening = true;
+        try {
+            window.Android.showRewardedAd();
+        } catch (e) {
+            gmNativeAdOpening = false;
+            showToast("Could not open the ad — try again");
+        }
         return;
     }
     gmAdState = { mode: mode === "theme" ? "theme" : "earn", endsAt: 0, claimed: false };
