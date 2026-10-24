@@ -13,12 +13,13 @@
 
   window.admob = window.admob || {};
 
-  // Test app ID (replace with your own production app ID before publishing).
+  // Production AdMob app ID (also set in index.html <meta name="gm-admob-app-id">).
+  window.admob.appId = "ca-app-pub-8808521207954078~9122584573";
   window.admob.testAppId = "ca-app-pub-8808521207954078~9122584573";
 
   // No ad unit IDs configured yet — the app treats this as "ads disabled"
   // and quietly skips any ad-related UI instead of showing broken placeholders.
-  window.admob.bannerUnitId = "ca-app-pub-8808521207954078/2990123456";
-  window.admob.interstitialUnitId = "ca-app-pub-8808521207954078/4567891230";
-  window.admob.rewardedUnitId = "ca-app-pub-8808521207954078/7890123456";
+  window.admob.bannerUnitId = "ca-app-pub-3940256099942544/6300978111";
+  window.admob.interstitialUnitId = "ca-app-pub-3940256099942544/1033173712";
+  window.admob.rewardedUnitId = "ca-app-pub-3940256099942544/5224354917";
 })();
