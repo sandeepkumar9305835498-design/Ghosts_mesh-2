@@ -67,7 +67,7 @@ for (const fn of ["gmConfirm", "gmConfirmResolve", "openSettingsSheet", "closeSe
     "claimDailyBonus", "msUntilBonus", "formatBonusWait", "pasteCodeManually", "gmClosePasteModal",
     "gmSubmitPasteCode", "scanQrFromImage", "gmHandleQrImage", "startCameraScan",
     "gmSetBluetoothScan", "gmRefreshBluetoothPeers", "openLiveMap", "closeLiveMap",
-    "saveProfilePhone", "gmOpenSponsoredBreak", "gmClaimSponsoredCredits", "gmDpCropOpen",
+    "saveDisplayName", "gmProfileNameDirty", "gmOpenSponsoredBreak", "gmClaimSponsoredCredits", "gmDpCropOpen",
     "gmDpCropApply", "gmDpCropCancel"]) {
     ok(`window.${fn} is a function`, typeof window[fn] === "function", typeof window[fn]);
 }
@@ -521,8 +521,11 @@ ok("renderChatList keeps exactly one empty card", chatList.querySelectorAll(".em
 // ------------------------------------------------------- privacy policy
 window.openPrivacyPolicy();
 ok("the privacy policy opens", hidden("privacy-modal") === false);
-ok("the policy says no account server and no cloud database",
-    /no account server/i.test($("privacy-modal").textContent) && /Nothing\./.test($("privacy-modal").textContent));
+ok("the policy says no account server and no account data",
+    /no account server/i.test($("privacy-modal").textContent)
+        && /No account data/i.test($("privacy-modal").textContent));
+ok("the policy discloses the AdMob ads",
+    /Google AdMob/i.test($("privacy-modal").textContent));
 window.closePrivacyPolicy();
 ok("the privacy policy closes", hidden("privacy-modal") === true);
 
@@ -578,16 +581,19 @@ window.unblockPeer("Ghost-SAFE01");
 ok("unblocking removes the Ghost from the list", !/Ghost-SAFE01/.test($("blocked-list").textContent));
 window.closeBlockedList();
 
-// ------------------------------------------------------- live location opt-in
-window.initChatData("Ghost-LOC01");
-window.openChat("Ghost-LOC01");
-window.shareLiveLocation();
-ok("live location asks before anything is shared",
-    hidden("gm-confirm") === false && /off by default/i.test($("gm-confirm-msg").innerText),
-    $("gm-confirm-msg").innerText);
-window.gmConfirmResolve(false);
-ok("declining shares nothing", /Live location on/.test(toastText()) === false, toastText());
-window.goBackToList();
+// ------------------------------------------------ continuous location removed
+// Live (continuous) location sharing was removed for app-store compliance: an
+// anonymous chat app that keeps sending a position is high-risk in review. The
+// radar map remains a one-time, opt-in feature of its own.
+{
+    window.initChatData("Ghost-LOC01");
+    window.openChat("Ghost-LOC01");
+    const menu = doc.getElementById("chat-menu");
+    ok("the chat menu no longer offers continuous location sharing",
+        !/Share Location/.test(menu.textContent) && typeof window.shareLiveLocation === "undefined",
+        menu.textContent.trim().replace(/\s+/g, " ").slice(0, 90));
+    window.goBackToList();
+}
 
 // ------------------------------------------------------- battery saver
 window.toggleLowBatteryMode();
@@ -666,6 +672,32 @@ ok("battery saver turns off", $("call-battery-btn").classList.contains("battery-
     window.endCurrentCall();
     await new Promise(r => setTimeout(r, 20));
     ok("ending the call closes the call screen", hidden("call-screen") === true);
+}
+
+// A real PeerJS MediaConnection reports open === false until THIS side answers
+// (open flips true inside answer()). Using that flag as a "caller hung up"
+// check ended every received call the instant Accept was tapped.
+{
+    window.initChatData("Ghost-RING5");
+    let answeredWith = null;
+    const handlers = {};
+    const peerConnection = { signalingState: "have-remote-offer", connectionState: "new" };
+    const call = {
+        peer: "Ghost-RING5", open: false, metadata: { type: "voice" }, peerConnection,
+        on(evt, cb) { handlers[evt] = cb; },
+        close() {},
+        answer(stream) { answeredWith = stream; this.open = true; }
+    };
+    window.handleIncomingCall(call);
+    ok("a PeerJS call that is still ringing (open === false) is not treated as dead",
+        hidden("incoming-call-overlay") === false);
+    window.acceptIncomingCall();
+    await new Promise(r => setTimeout(r, 40));
+    ok("answering a call whose PeerJS open flag is still false connects instead of ending",
+        answeredWith !== null && hidden("call-screen") === false && !/already ended/i.test(toastText()),
+        "answered=" + (answeredWith !== null) + " toast=" + toastText());
+    window.endCurrentCall();
+    await new Promise(r => setTimeout(r, 20));
 }
 
 // --------------------------------------------- screen stays awake during calls
@@ -881,24 +913,28 @@ ok("the right PIN unlocks the idle-locked app",
         hidden("chatlist-screen") === false && hidden("map-screen") === true);
 }
 
-// ------------------------------------------------ editable phone number
+// ------------------------------------------------ name-only profile editor
 {
     window.openProfile();
-    $("profile-phone-input").value = "9876543210";
-    window.gmProfilePhoneDirty();
-    ok("editing the phone reveals its own Save button", hidden("profile-phone-save-btn") === false);
-    window.saveProfilePhone();
-    ok("saving the phone number says so", toastText() === "Phone number saved!", toastText());
-    ok("the phone Save button hides again", hidden("profile-phone-save-btn") === true);
+    ok("the profile no longer offers phone or status editing",
+        !$("profile-phone-input") && !$("profile-status"));
+    const editableFields = [...doc.querySelectorAll("#profile-screen input, #profile-screen select")]
+        .filter(el => el.type !== "hidden" && !el.disabled);
+    ok("the only editable profile field is the display name",
+        editableFields.length === 1 && editableFields[0].id === "profile-name-input",
+        editableFields.map(el => el.id).join(","));
+    $("profile-name-input").value = "Test Ghost";
+    window.gmProfileNameDirty();
+    ok("editing the name reveals its Save button", hidden("profile-save-btn") === false);
+    window.saveDisplayName();
+    ok("saving the name says so", toastText() === "Name saved!", toastText());
+    ok("the name Save button hides again", hidden("profile-save-btn") === true);
+    ok("the new name is shown on the profile",
+        $("profile-name-display").innerText === "Test Ghost", $("profile-name-display").innerText);
+    $("profile-name-input").value = "   ";
+    window.saveDisplayName();
+    ok("an empty name is rejected", toastText() === "Enter a name", toastText());
     window.updateProfileScreen();
-    ok("the saved phone shows up in the profile field",
-        $("profile-phone-input").value === "9876543210", $("profile-phone-input").value);
-    $("profile-phone-input").value = "123";
-    window.saveProfilePhone();
-    ok("an incomplete phone number is rejected",
-        toastText() === "That phone number looks incomplete", toastText());
-    $("profile-phone-input").value = "9876543210";
-    window.saveProfilePhone();
     window.closeProfile();
 }
 
@@ -1018,6 +1054,28 @@ ok("the right PIN unlocks the idle-locked app",
     ok("the Accept button still approves the connection",
         sent.some(s => s.peer === "Ghost-REQ3" && s.m.approved === true), JSON.stringify(sent));
     ok("accepting closes the request dialog", hidden("request-modal") === true);
+}
+
+// ------------------------------ offline channel that is already open
+// After a QR handshake the data channel can already be open by the time the app
+// wraps it. onopen never fires in that case, so the old wrapper never registered
+// the connection and "Open Chat" had nothing to open.
+{
+    const sent = [];
+    const fakeDc = {
+        readyState: "open",
+        send(data) { sent.push(data); },
+        close() {}
+    };
+    const wrapped = window.wrapOfflineChannel(fakeDc, "Ghost-ALREADY");
+    let opened = 0;
+    wrapped.on("open", () => { opened++; });
+    await new Promise(r => setTimeout(r, 0));
+    ok("an offline channel that is already open still fires 'open'",
+        opened === 1 && wrapped.open === true, "opened=" + opened);
+    wrapped.send({ type: "ping" });
+    ok("the wrapped offline channel sends JSON while open",
+        sent.length === 1 && sent[0] === JSON.stringify({ type: "ping" }), sent.join(","));
 }
 
 // ---------------------------------------------- nothing logged an error

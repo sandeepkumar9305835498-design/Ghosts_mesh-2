@@ -746,17 +746,33 @@ body {
 
 /* ===== MESSAGE CARDS ===== */
 .card {
-    max-width: 74%;
+    max-width: 75%;
     width: fit-content;
     padding: 8px 12px 6px;
     border-radius: 14px;
     position: relative;
     cursor: pointer;
     word-break: break-word;
+    overflow-wrap: anywhere;
     line-height: 1.5;
     font-size: 14px;
     margin-bottom: 2px;
     transition: filter 0.1s;
+}
+/* Long words / links / pasted hashes used to spill past the bubble edge.
+   This keeps every message inside its own rounded box. */
+.msg-text-content {
+    max-width: 100%;
+    min-width: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+.msg-text-content img,
+.msg-text-content video {
+    max-width: 100%;
+    height: auto;
+    border-radius: 10px;
 }
 .card:active { filter: brightness(0.88); }
 .card.outgoing {
@@ -1154,6 +1170,17 @@ body {
     object-fit: cover; display: block;
     background: #0b0710;
 }
+/* Voice-call audio sink. It must stay in the layout (1px + transparent) —
+   display:none makes some Android WebView builds treat the element as
+   inactive and the call connects with no sound. */
+.remote-audio {
+    position: absolute;
+    left: 0; bottom: 0;
+    width: 1px; height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
 /* DP fallback fills the same space as the remote video — shown for voice
    calls, and for video calls whenever the peer's camera is off. */
 .call-dp-fallback {
@@ -1344,6 +1371,16 @@ button { touch-action: manipulation; }
         margin: 0 auto;
         box-shadow: 0 0 60px rgba(0,0,0,0.6);
     }
+    /* The bottom bar follows the centred 480px phone frame instead of
+       stretching across the whole desktop window. Still a static transform:
+       nothing animates, so the bar cannot jitter. */
+    .gm-nav {
+        left: 50%;
+        right: auto;
+        width: 480px;
+        max-width: 100%;
+        transform: translateX(-50%) translateZ(0);
+    }
     .toast { bottom: 90px; }
 }
 
@@ -1487,98 +1524,135 @@ body.theme-whatsapp .msg-tick.read {
    ===================================================================== */
 
 :root {
-    /* Room reserved at the bottom of the screens that show the pill nav:
-       capsule height + its float gap + a little breathing room. */
-    --gm-nav-h: 78px;
+    /* Height of the fixed bottom bar. Screens that show it reserve
+       --gm-nav-h + 16px of bottom padding so nothing hides behind it. */
+    --gm-nav-h: 72px;
     /* Snappy "out" curve for movement, calmer curve for state fades. */
     --gm-ease: cubic-bezier(0.22, 1, 0.36, 1);
     --gm-ease-in: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* ---- Bottom floating pill nav --------------------------------------- */
+/* ---- Bottom navigation bar (rock solid, WhatsApp style) --------------- */
+/* A full-width bar pinned to the bottom. The BAR itself never moves: no
+   transform animation, no height/padding change, no :active scale and no
+   keyframes. Only two things ever change on a tap — the item's colour and the
+   icon pill behind it — so a tap cannot shift layout.
+   translateZ(0) + will-change put the bar on its own compositor layer, and
+   `contain` keeps a repaint inside the bar instead of the whole page. */
 .gm-nav {
     position: fixed;
-    left: 50%;
-    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
-    transform: translateX(-50%);
+    left: 0;
+    right: 0;
+    bottom: 0;
     z-index: 900;
     display: flex;
     align-items: stretch;
-    gap: 2px;
-    width: min(420px, calc(100% - 24px));
-    padding: 6px;
+    justify-content: space-around;
+    width: 100%;
+    height: calc(var(--gm-nav-h) + env(safe-area-inset-bottom, 0px));
+    padding: 0 0 env(safe-area-inset-bottom, 0px);
+    margin: 0;
     background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.5), 0 6px 14px rgba(0,0,0,0.35);
+    border: 0;
+    border-top: 1px solid var(--border);
+    border-radius: 0;
+    box-shadow: 0 -6px 22px rgba(0, 0, 0, 0.32);
     font-family: inherit;
-    animation: gmNavIn 0.32s var(--gm-ease) both;
+    transform: translateZ(0);
+    will-change: transform;
+    backface-visibility: hidden;
+    contain: layout style;
+    animation: none;
 }
 /* .hidden already carries !important, so this is just documentation. */
 .gm-nav.hidden { display: none !important; }
 
-@keyframes gmNavIn {
-    from { opacity: 0; transform: translateX(-50%) translateY(16px); }
-    to   { opacity: 1; transform: translateX(-50%) translateY(0); }
-}
-
-/* Instagram-style highlight: one capsule that slides between the items.
-   JS sets its width + translateX from the active button's geometry. */
-.gm-nav-pill {
-    position: absolute;
-    left: 0;
-    top: 6px;
-    bottom: 6px;
-    width: 0;
-    opacity: 0;
-    border-radius: 999px;
-    background: var(--accent-soft);
-    border: 1px solid var(--border);
-    pointer-events: none;
-    transition: transform 0.32s var(--gm-ease), width 0.32s var(--gm-ease),
-                opacity 0.18s linear;
-}
+/* The old sliding capsule is kept in the DOM (the checks reference it) but is
+   never painted or measured: the highlight is a per-item pill now, so nothing
+   slides when the tab changes. */
+.gm-nav-pill { display: none; }
 
 .gm-nav-item {
     position: relative;
-    z-index: 1;
-    flex: 1;
+    flex: 1 1 0;
+    width: 25%;
+    max-width: 25%;
+    height: 100%;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 3px;
-    padding: 7px 2px 6px;
-    background: none;
-    border: none;
-    border-radius: 999px;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    outline: none;
     color: var(--text3);
     font-family: inherit;
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 0.02em;
+    line-height: 1;
     cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
-    transition: color 0.2s var(--gm-ease);
+    /* Kill the Android ripple/state layer entirely — it is what shifted the
+       bar on every tap. */
+    -webkit-appearance: none;
+    appearance: none;
+    transform: translateZ(0);
+    /* Only colour changes. Never `all`, never transform, size or padding. */
+    transition: color 0.2s ease;
 }
+.gm-nav-item:active,
+.gm-nav-item:focus,
+.gm-nav-item:hover {
+    transform: none;
+    background: transparent;
+    outline: none;
+}
+/* The pill sits behind the icon (not behind the label), exactly like the
+   WhatsApp/Instagram tab highlight. Width/height are fixed, so the pill can
+   only fade its colour in — it never grows or slides. */
+.gm-nav-item::before {
+    content: "";
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    width: 56px;
+    height: 30px;
+    margin-left: -28px;
+    border-radius: 999px;
+    background: transparent;
+    pointer-events: none;
+    transition: background-color 0.2s ease;
+}
+.gm-nav-item.active::before { background: var(--accent-soft); }
+.gm-nav-item.active { color: var(--accent); }
 .gm-nav-item svg {
+    position: relative;
+    z-index: 1;
     width: 21px;
     height: 21px;
     display: block;
-    transition: transform 0.26s var(--gm-ease);
+    transition: none;
+    transform: none;
 }
-/* Instant press acknowledgement: no transition on purpose, so the scale
-   lands the same frame the finger does. */
-.gm-nav-item:active { transform: scale(0.94); }
-.gm-nav-item.active { color: var(--accent); }
-.gm-nav-item.active svg { transform: translateY(-1px) scale(1.08); }
-.gm-nav-label { line-height: 1; }
+.gm-nav-item.active svg { transform: none; }
+.gm-nav-label {
+    position: relative;
+    z-index: 1;
+    line-height: 1;
+}
 
-/* The nav floats over the app, so the two screens that show it reserve room
-   for it — nothing important can end up stranded behind the capsule. */
+/* The bar is fixed over the app, so the screens that show it reserve room for
+   it — 72px bar + 16px breathing room. */
 #chatlist-screen,
 #profile-screen {
-    padding-bottom: calc(var(--gm-nav-h) + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(var(--gm-nav-h) + 16px + env(safe-area-inset-bottom, 0px));
 }
 
 /* ---- Screen transitions --------------------------------------------- */

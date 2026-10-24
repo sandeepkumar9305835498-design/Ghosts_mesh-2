@@ -20,12 +20,21 @@
          script.js, so this meta tag is the single source of truth for the web
          build. Do not commit a live key here. -->
     <meta name="gm-razorpay-key" content="rzp_test_TpjbsTfAoTQsBY">
-    <!-- AdMob app ID (placeholder). The app treats a missing/empty app ID as
-         "ads disabled" and quietly skips any ad surfaces instead of showing
-         broken placeholders. Replace with your own app ID before publishing. -->
-    <meta name="gm-adnetwork" content="adsense">
-    <meta name="gm-ad-client" content="ca-app-pub-8808521207954078~9122584573">
+    <!-- ==========================================================
+         GOOGLE ADMOB IDS (used by the Android app)
+         app id      : ca-app-pub-XXXX~YYYY   (tilde)  → also in
+                       android/app/src/main/AndroidManifest.xml
+         banner unit : ca-app-pub-XXXX/YYYY   (slash)
+         interstitial: ca-app-pub-XXXX/YYYY
+         rewarded    : ca-app-pub-XXXX/YYYY
+         These are AdMob unit ids, NOT AdSense slots. AdSense would need a
+         ca-pub-… publisher id plus a numeric data-ad-slot, and it is not
+         allowed inside a WebView — which is why the APK serves real ads
+         natively through window.Android instead.
+         ========================================================== -->
     <meta name="gm-ad-slot" content="ca-app-pub-8808521207954078/2990123456">
+    <meta name="gm-ad-interstitial-unit" content="ca-app-pub-8808521207954078/4567891230">
+    <meta name="gm-ad-rewarded-unit" content="ca-app-pub-8808521207954078/7890123456">
     <meta name="gm-admob-app-id" content="ca-app-pub-8808521207954078~9122584573">
     <script src="peerjs.min.js"></script>
     <link rel="stylesheet" href="leaflet.css"/>
@@ -297,9 +306,9 @@
                             <button class="primary-btn" onclick="startOfflineJoinScan()">Scan Their QR</button>
                         </div>
                         <div id="offline-join-step2" class="hidden" style="text-align:center;">
-                            <p class="sub">Show this reply QR to them so they can scan it</p>
+                            <p class="sub">Show this reply QR to them so they can scan it — the chat opens by itself once they do</p>
                             <div id="offline-qr-join" class="offline-qr-box"></div>
-                            <p class="sub" id="offline-join-status">Waiting for connection...</p>
+                            <p class="sub" id="offline-join-status">Waiting for their scan...</p>
                         </div>
                         <div id="offline-join-step3" class="hidden" style="text-align:center;">
                             <div class="connected-check">✓</div>
@@ -360,14 +369,15 @@
         </div>
     </div>
 
-    <!-- BOTTOM FLOATING PILL NAV — the ONE switcher (the top tab bar was removed
-     because it duplicated these destinations). Chats / WiFi / Online, plus
-     Settings pinned last, which opens the settings sheet. Profile is reached from
-     Settings (or the avatar in the header) instead of owning a slot here, and
-     "Connect" is not a nav item — pairing lives in the WiFi panel, which is where
-     you already are when you need it. Visibility and the sliding highlight capsule
-     are driven from script.js (gmNavGo / gmSyncBottomNav).
-     position:fixed, so sitting here in the DOM costs nothing. -->
+    <!-- BOTTOM NAVIGATION — the ONE switcher (the top tab bar was removed
+     because it duplicated these destinations): Chats / WiFi / Bluetooth / Map.
+     It is a full-width, fixed bar that never animates or moves; a tap only
+     flips the active colour and the pill behind that icon. Profile is reached
+     from Settings (or the avatar in the header) instead of owning a slot here,
+     and "Connect" is not a nav item — pairing lives in the WiFi panel, which is
+     where you already are when you need it. Visibility is driven from script.js
+     (gmNavGo / gmSyncBottomNav). position:fixed, so sitting here in the DOM
+     costs nothing. -->
 <nav id="gm-bottom-nav" class="gm-nav hidden" aria-label="Main navigation">
     <span class="gm-nav-pill" id="gm-nav-pill" aria-hidden="true"></span>
     <button class="gm-nav-item" data-nav="chats" onclick="gmNavGo('chats')" aria-label="Chats">
@@ -431,10 +441,6 @@
                         <div class="menu-item" role="button" tabindex="0" onclick="openSendCreditModal()">
                             <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>
                             Send Credit
-                        </div>
-                        <div class="menu-item" role="button" tabindex="0" onclick="shareLiveLocation()">
-                            <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
-                            Share Location
                         </div>
                         <div class="menu-item" role="button" tabindex="0" onclick="toggleChatNotif()">
                             <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
@@ -648,30 +654,14 @@
                 <span id="profile-premium-label">Premium</span>
             </button>
             <div class="profile-info-box">
-                <!-- Both fields are editable right here: type, then tap Save.
-                     The phone stays device-only and is never part of the Ghost ID. -->
+                <!-- Only the display name is editable here. Phone, status and
+                     the read-only network row were removed: nothing else on
+                     this screen is part of the Ghost ID, and the extra fields
+                     made the profile look like a second settings page. -->
                 <div class="profile-field">
                     <label for="profile-name-input">Display Name</label>
                     <input type="text" id="profile-name-input" class="profile-input" placeholder="Your name" oninput="gmProfileNameDirty()">
                     <button class="save-btn hidden" id="profile-save-btn" onclick="saveDisplayName()">Save</button>
-                </div>
-                <div class="profile-field">
-                    <label for="profile-phone-input">Phone <span class="optional">(optional — never used for your ID)</span></label>
-                    <input type="tel" id="profile-phone-input" class="profile-input" placeholder="Add or change your number" oninput="gmProfilePhoneDirty()">
-                    <button class="save-btn hidden" id="profile-phone-save-btn" onclick="saveProfilePhone()">Save</button>
-                </div>
-                <div class="profile-field">
-                    <label>Status</label>
-                    <select id="profile-status" class="profile-select" onchange="saveStatus()">
-                        <option value="available">Available</option>
-                        <option value="busy">Busy</option>
-                        <option value="dnd">Do Not Disturb</option>
-                        <option value="invisible">Invisible</option>
-                    </select>
-                </div>
-                <div class="profile-field">
-                    <label>Network</label>
-                    <div class="field-value">Direct P2P · End-to-End Encrypted</div>
                 </div>
             </div>
             <!-- CREDITS & PREMIUM — deliberately compact: one slim widget row
@@ -725,7 +715,7 @@
             <div class="settings-list">
                 <button class="settings-row" onclick="gmOpenProfileFromSettings()">
                     <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>
-                    <span class="settings-row-text"><span class="settings-row-title">My Profile</span><span class="settings-row-sub">Edit name and phone · Ghost ID · status · recovery phrase</span></span>
+                    <span class="settings-row-text"><span class="settings-row-title">My Profile</span><span class="settings-row-sub">Change your display name · Ghost ID · recovery phrase</span></span>
                 </button>
                 <button class="settings-row" onclick="closeSettingsSheet();gmOpenGhostAssistant()">
                     <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>
@@ -844,22 +834,26 @@
     <div id="privacy-modal" class="modal-overlay hidden" role="dialog" aria-label="Privacy Policy" onclick="if(event.target===this)closePrivacyPolicy()">
         <div class="modal-box privacy-box">
             <h4>Privacy Policy</h4>
-            <p class="sub">Last updated 18 October 2026</p>
+            <p class="sub">Last updated 23 October 2026</p>
             <div class="privacy-body">
                 <h5>In one sentence</h5>
                 <p>Ghost Mesh has no account server and no cloud database — your messages, contacts and profile stay on your phone.</p>
                 <h5>What we collect</h5>
-                <p>Nothing. There is no sign-up, no email, no phone verification and no analytics SDK in the app.</p>
+                <p>No account data: no sign-up, no email, no phone number.</p>
                 <h5>Where your data lives</h5>
                 <p>Chats, settings, your display name and your Ghost ID are stored in this app's local storage on your device. They are not uploaded anywhere.</p>
                 <h5>Direct connections</h5>
                 <p>Messages and calls travel directly between two devices using WebRTC. When pairing over the internet, the public PeerJS broker is used only to exchange connection metadata; message content goes device to device.</p>
+                <h5>Advertising</h5>
+                <p>Free users see ads from Google AdMob. Google may use a device advertising ID to serve and measure them; Ghost Mesh does not receive or store that data. Premium users see no ads. You can reset the advertising ID in Android Settings → Google → Ads.</p>
                 <h5>Location</h5>
-                <p>Location is off by default. It is used only when you choose to share it or open the radar map, and it is never stored on a server.</p>
+                <p>Location is off by default and is asked for only when you open the radar map. It is never stored on a server.</p>
+                <h5>Permissions</h5>
+                <p>Camera and microphone are used for QR pairing, voice notes and calls. Nearby devices is used for Bluetooth and Wi-Fi Direct discovery. Notifications are used for incoming calls and messages.</p>
                 <h5>Content and safety</h5>
                 <p>An on-device filter blocks abusive or explicit text you send, and you can report and block any contact. Reports stay on this device for your own record.</p>
                 <h5>Children</h5>
-                <p>Ghost Mesh is not directed at children under 13.</p>
+                <p>Ghost Mesh is not directed at children under 13, and ads are not intended for children.</p>
                 <h5>Contact</h5>
                 <p>Questions about privacy: privacy@ghostmesh.app</p>
             </div>
@@ -1258,6 +1252,11 @@
     <!-- Remote video always fills the screen when video call is active -->
     <video id="remote-video" autoplay playsinline class="remote-vid-full hidden"></video>
 
+    <!-- Voice calls play here. A display:none <video> is not a reliable audio
+         sink in Android WebView, which is why voice calls used to connect and
+         stay silent. Kept 1px + transparent, never display:none. -->
+    <audio id="remote-audio" autoplay playsinline class="remote-audio"></audio>
+
     <!-- Shown instead of remote video: voice calls, or video-off moments -->
     <div id="call-dp-fallback" class="call-dp-fallback">
         <div id="call-peer-avatar-big" class="default-avatar call-size">
@@ -1423,6 +1422,89 @@ if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)
     });
 }
 </script>
+
+<!-- ===================================================================
+     NATIVE BRIDGE TRIGGERS — AdMob + Bluetooth/Wi-Fi Direct
+     Must come AFTER script.js: it calls into the app's own functions and
+     re-uses its credits/reward flow. In a plain browser every call below
+     is skipped, so the web build behaves exactly as before.
+     =================================================================== -->
+<script>
+(function () {
+    "use strict";
+
+    // MainActivity calls gmOnRewardedAdCompleted() when it exists, and only
+    // falls back to giveUserReward() for pages that do not define it. This
+    // shim keeps both names working without ever paying twice.
+    window.giveUserReward = window.giveUserReward || function (amount) {
+        var reward = Math.max(2, parseInt(amount, 10) || 0);
+        if (typeof window.gmOnRewardedAdCompleted === "function") {
+            window.gmOnRewardedAdCompleted(reward);
+            return;
+        }
+        if (typeof addCredits === "function") addCredits(reward);
+        if (typeof renderCreditsUI === "function") renderCreditsUI();
+        if (typeof showToast === "function") showToast("+" + reward + " credits added");
+    };
+
+    // AdMob is still filling the first request: say so instead of failing.
+    window.gmOnAdLoading = function () {
+        if (typeof showToast === "function") showToast("Ad is loading… it opens by itself");
+    };
+    // The reward is already paid by gmOnRewardedAdCompleted; nothing to do.
+    window.gmOnAdClosed = window.gmOnAdClosed || function () {};
+
+    // AdMob: initialise/retry every placement and re-sync banner visibility.
+    function gmSyncNativeAds() {
+        try {
+            if (!window.Android) return;
+            if (typeof window.Android.loadAds === "function") window.Android.loadAds();
+            if (typeof window.gmSyncAdBanner === "function") window.gmSyncAdBanner();
+        } catch (e) { /* browser build: no native ads */ }
+    }
+
+    // Bluetooth + Wi-Fi Direct: script.js owns Ghost ID / display name, so
+    // call its starter when available and fall back to the raw bridge.
+    function gmStartNearbyScan() {
+        try {
+            if (!window.GhostNative) return;
+            if (typeof window.gmStartNativeDiscovery === "function") {
+                window.gmStartNativeDiscovery();
+            } else {
+                window.GhostNative.startDiscovery();
+            }
+            if (typeof window.GhostNative.refreshPeers === "function") {
+                window.GhostNative.refreshPeers();
+            }
+        } catch (e) { /* browser build: no native radios */ }
+    }
+
+    function gmBootNative() {
+        gmSyncNativeAds();
+        gmStartNearbyScan();
+    }
+
+    if (document.readyState === "complete") setTimeout(gmBootNative, 600);
+    else window.addEventListener("load", function () { setTimeout(gmBootNative, 600); });
+
+    // Console diagnostics — type gmAdDiag() or gmMeshDiag() in Chrome inspect.
+    window.gmAdDiag = function () {
+        try {
+            return window.Android && window.Android.getAdStatus
+                ? JSON.parse(window.Android.getAdStatus())
+                : "no native ads in this build";
+        } catch (e) { return String(e); }
+    };
+    window.gmMeshDiag = function () {
+        try {
+            return window.GhostNative && window.GhostNative.getDiagnostics
+                ? JSON.parse(window.GhostNative.getDiagnostics())
+                : "no native mesh in this build";
+        } catch (e) { return String(e); }
+    };
+})();
+</script>
+
 <div id="media-viewer" class="fullscreen hidden media-viewer">
     <button class="media-viewer-close" onclick="closeMediaViewer()" aria-label="Close media viewer">
         <svg viewBox="0 0 24 24" fill="white" width="26" height="26"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
