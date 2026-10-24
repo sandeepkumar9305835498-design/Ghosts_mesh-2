@@ -538,6 +538,25 @@ if (!/offlineWrappedChannels/.test(scriptSource)) {
 if (!/if \(conn\.__offline\)/.test(scriptSource)) {
     meshProblems.push("an online close can delete the offline transport");
 }
+// A PeerJS online connection and a QR/Wi-Fi connection share the same Ghost
+// ID. When the internet drops, the online one closes; it must never end a call
+// that the offline link is carrying.
+if (!/if \(conn\.__offline && activeOfflineCallPeer === conn\.peer\) endCallFlow\(\);/.test(scriptSource)) {
+    meshProblems.push("an online close can end a healthy offline call");
+}
+// Offline signalling must prefer the direct LAN link over the PeerJS socket.
+const sendPeerFn = (scriptSource.match(/function sendToPeer\([\s\S]*?\n\}/) || [""])[0];
+if (!/offlineWrappedChannels\[peerId\]/.test(sendPeerFn)) {
+    meshProblems.push("offline signalling does not prefer the QR/Wi-Fi link");
+}
+// A connected/completed ICE pair means the media path is up; the failed-state
+// watchdog must not end the call in that state.
+if (!/ice === "connected" \|\| ice === "completed"/.test(scriptSource)) {
+    meshProblems.push("a connected ICE pair can still end the call");
+}
+for (const stun of ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302", "stun:stun2.l.google.com:19302"]) {
+    if (!scriptSource.includes(stun)) meshProblems.push("missing STUN server " + stun);
+}
 if (!/dc\.readyState === "open"/.test(scriptSource)) {
     meshProblems.push("an already-open data channel is not handled");
 }
