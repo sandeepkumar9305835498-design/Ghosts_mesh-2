@@ -1460,6 +1460,7 @@ let peerIdRetries = 0;
 const GM_ICE_SERVERS = [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun2.l.google.com:19302" },
     { urls: "stun:global.stun.twilio.com:3478" }
 ];
 
@@ -1785,7 +1786,12 @@ function setupConn(conn) {
         if (chatData[conn.peer]) addSystemMsg(conn.peer, conn.peer + " disconnected");
         updateOnlineUsers(conn.peer, conn.peer, false);
         renderChatList();
-        if (activeOfflineCallPeer === conn.peer) endCallFlow();
+        // ONLY the offline link may end an offline call. PeerJS's online
+        // connection for the same Ghost ID closes as soon as the internet goes
+        // away, and ending the call there killed a perfectly healthy QR/Wi-Fi
+        // call the moment the user disconnected — the exact regression this
+        // guard fixes.
+        if (conn.__offline && activeOfflineCallPeer === conn.peer) endCallFlow();
         // Only tear down the offline transport when the OFFLINE link itself
         // closed. An online PeerJS connection closing for the same Ghost ID used
         // to delete the still-working QR/Wi-Fi connection, which killed offline
@@ -1993,7 +1999,11 @@ function gmRenderOnlineStrip() {
     const ids = [...new Set([
         ...Object.keys(onlineUsers).filter(id => onlineUsers[id] && onlineUsers[id].online),
         ...(activeConnections || []).filter(c => c && c.open).map(c => c.peer),
-        ...Object.keys(window.gmNativePeers || {})
+        ...Object.keys(window.gmNativePeers || {}),
+        // App users the broker just reported online. They have not been
+        // connected to yet, but they ARE reachable right now — the whole point
+        // of the lobby poll is to show them without typing a Ghost ID.
+        ...Object.keys(discoveredPeers || {})
     ])].filter(id => id && id !== userGhostID && !blockedPeers.has(id));
     list.innerHTML = "";
     if (!ids.length) {
@@ -2699,18 +2709,26 @@ function finishOfflineConnect() {
     // the only known offline peer. This makes the button work even if it is
     // tapped in the same tick the connection finished.
     const liveOfflinePeers = Object.keys(offlinePeerConnections || {});
-    const peerId = finishOfflineConnectPeerId
-        || (offlineWrapped && offlineWrapped.open ? offlineWrapped.peer : null)
-        || (liveOfflinePeers.length === 1 ? liveOfflinePeers[0] : null);
-    scrollToMainTab(0);
-    resetOfflinePanels();
-    hideEl("offline-flow-wrap");
+    // Skip the placeholder: it is replaced with the real Ghost ID as soon as
+    // the reply QR is scanned, and taking it here first would make "Open Chat"
+    // keep insisting the connection is not ready even after it is.
+    const peerId = [
+        finishOfflineConnectPeerId,
+        (offlineWrapped && offlineWrapped.open) ? offlineWrapped.peer : null,
+        liveOfflinePeers.length === 1 ? liveOfflinePeers[0] : null
+    ].find(id => id && id !== "offline-pending") || null;
     if (peerId && peerId !== "offline-pending") {
         finishOfflineConnectPeerId = null;
+        scrollToMainTab(0);
+        resetOfflinePanels();
+        hideEl("offline-flow-wrap");
         openChat(peerId);
         return;
     }
-    showToast("Not connected yet — finish both QR scans first");
+    // Still connecting: keep the "Connected!" screen and its Open Chat button
+    // on screen. Closing the flow here left the user looking at the chat list
+    // with no chat and no way back to the waiting screen.
+    showToast("Still connecting — keep both phones on the same Wi-Fi/hotspot");
 }
 
 // ----- JOIN (scanner) side -----
@@ -4115,6 +4133,18 @@ function sendToPeer(peerId, payload) {
             console.warn("sendToPeer failed on the tracked connection:", peerId, e);
         }
     }
+    // A QR/Wi-Fi link is a direct LAN channel that survives the internet going
+    // away, so it wins over the PeerJS socket. An offline call's SDP/ICE must
+    // never ride the internet connection — that socket closes the moment the
+    // internet does, which is how a working offline call used to lose its
+    // signalling and die.
+    const offlineLink = offlineWrappedChannels[peerId]
+        || Object.values(offlineWrappedChannels || {}).find(w => w && w.peer === peerId && w.open);
+    if (offlineLink && offlineLink.open) {
+        try { offlineLink.send(payload); return; } catch (e) {
+            console.warn("sendToPeer offline link failed, falling back:", peerId, e);
+        }
+    }
     // Fallback: the connection may still be alive inside PeerJS even after it
     // was dropped from activeConnections (a single failed broadcast used to do
     // exactly that). Without this, chat died the moment the internet blinked
@@ -4382,7 +4412,12 @@ function gmWatchCallConnection(pc) {
         try { if (typeof pc.restartIce === "function") pc.restartIce(); } catch (e) { /* older WebView */ }
         failedTimer = setTimeout(() => {
             failedTimer = null;
-            if (pc.connectionState === "failed" || pc.iceConnectionState === "failed") {
+            // An established ICE pair is the source of truth. connected /
+            // completed means the media path is up, with or without internet,
+            // so never end the call in that state.
+            const ice = pc.iceConnectionState;
+            if (ice === "connected" || ice === "completed") return;
+            if (pc.connectionState === "failed" || ice === "failed") {
                 showToast("Call connection lost");
                 endCallFlow();
             }
