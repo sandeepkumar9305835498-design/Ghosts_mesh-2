@@ -1597,8 +1597,14 @@ function setupConn(conn) {
                     selfDestruct: data.selfDestruct
                 };
                 chatData[chatId].messages.push(msg);
-                chatData[chatId].lastMsg = (data.groupId ? (data.senderName || data.sender) + ": " : "") + (data.text || "Media");
+                const chatPreview = data.text || (data.contentType === "location" ? "📍 Location" : "Media");
+                chatData[chatId].lastMsg = (data.groupId ? (data.senderName || data.sender) + ": " : "") + chatPreview;
                 chatData[chatId].lastTime = msg.time;
+                // A shared pin also lands on the radar map, exactly like the
+                // dedicated location message path does.
+                if (data.contentType === "location" && data.mediaPayload && data.mediaPayload.lat != null) {
+                    gmRememberPeerLocation(data.sender, data.mediaPayload.lat, data.mediaPayload.lng, data.senderName);
+                }
                 if (currentChatPeer !== chatId) {
                     chatData[chatId].unread = (chatData[chatId].unread || 0) + 1;
                 } else {
@@ -3208,7 +3214,7 @@ function sendBundle(contentType, payload) {
     if (chatId) {
         if (!chatData[chatId]) initChatData(chatId);
         chatData[chatId].messages.push(msg);
-        chatData[chatId].lastMsg = text || "Media";
+        chatData[chatId].lastMsg = text || (contentType === "location" ? "📍 Location" : "Media");
         chatData[chatId].lastTime = time;
         renderMessage(msg);
         if (selfDestructSeconds > 0) scheduleDestruct(msgId, selfDestructSeconds, chatId);
@@ -3232,6 +3238,40 @@ function sendBundle(contentType, payload) {
 
     if (isViewOnceEnabled) toggleViewOnceMode();
     renderChatList();
+}
+
+// Shares the CURRENT position once, as a normal chat message. The receiver
+// already renders a location card (Google Maps + radar map), so nothing extra
+// is needed on the wire. Deliberately one-shot and foreground-only: there is
+// no live/background tracking anywhere in the app.
+function shareCurrentLocation() {
+    closeAllMenus();
+    hideEl("attach-menu");
+    if (!currentChatPeer) { showToast("Open a chat first"); return; }
+    if (!navigator.geolocation || typeof navigator.geolocation.getCurrentPosition !== "function") {
+        showToast("This device has no location service");
+        return;
+    }
+    showToast("Getting your location…");
+    navigator.geolocation.getCurrentPosition(pos => {
+        // The chat can be closed while the fix is being taken.
+        if (!currentChatPeer) { showToast("Open a chat first"); return; }
+        const coords = pos && pos.coords ? pos.coords : null;
+        if (!coords || coords.latitude == null || coords.longitude == null) {
+            showToast("Could not read your location");
+            return;
+        }
+        sendBundle("location", { lat: coords.latitude, lng: coords.longitude });
+        showToast("Location shared");
+    }, err => {
+        // 1 = permission denied, 2 = position unavailable, 3 = timeout
+        const code = err && err.code;
+        showToast(code === 1
+            ? "Location permission denied — allow it in Settings"
+            : code === 3
+                ? "Location timed out — try again near a window"
+                : "Could not get your location right now");
+    }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 });
 }
 
 function renderMessage(msg) {

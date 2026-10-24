@@ -1081,6 +1081,13 @@ body {
     align-items: center; z-index: 1000;
     padding: 20px; backdrop-filter: blur(6px);
 }
+/* The confirm sheet has to sit ABOVE every other modal. It is earlier in the
+   DOM than the recovery-phrase modal, so with an equal z-index that modal
+   painted over the confirm — tapping "Skip for now" looked completely dead
+   because the dialog was behind the phrase screen. 2500 also clears the call
+   screen and the sponsor break (both 2000), and stays under the media viewer
+   and the QR scanner. */
+#gm-confirm { z-index: 2500; }
 .modal-box {
     background: var(--surface);
     border: 1px solid var(--border);

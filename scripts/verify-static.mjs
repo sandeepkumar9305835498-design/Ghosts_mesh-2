@@ -428,6 +428,32 @@ if (!/gmPeersByTransport\("ble"\)/.test(scriptSource) || !/gmPeersByTransport\("
 if (!/id="map-screen"[^>]*class="app-screen/.test(html)) extrasProblems.push("the map is not an app screen");
 check("Bluetooth tab, live map, name-only profile and sponsor surface are wired", extrasProblems);
 
+// ------------------------------- 13b. one-time location share + on-top confirm
+// A pin can be shared from the attach menu exactly once. Live/background
+// tracking must stay removed, and the confirm sheet must paint above the
+// recovery-phrase modal (it used to open behind it, so "Skip for now" looked
+// dead).
+const shareProblems = [];
+if (!defined.has("shareCurrentLocation")) shareProblems.push("shareCurrentLocation() is missing");
+const attachStart = html.indexOf('id="attach-menu"');
+const attachEnd = html.indexOf('id="camera-btn"', attachStart);
+const attachBlock = attachStart >= 0 && attachEnd > attachStart ? html.slice(attachStart, attachEnd) : "";
+if (!attachBlock) shareProblems.push("could not locate the attach menu");
+else if (!/onclick="shareCurrentLocation\(\)"/.test(attachBlock)) {
+    shareProblems.push("the attach menu has no one-time location share");
+}
+if (!/navigator\.geolocation\.getCurrentPosition/.test(scriptSource)) {
+    shareProblems.push("shareCurrentLocation() does not read the current position");
+}
+if (/shareLiveLocation|geolocation\.watchPosition/.test(scriptSource)) {
+    shareProblems.push("live/background location tracking is back");
+}
+const confirmZ = Number((css.match(/#gm-confirm\s*\{[^}]*z-index\s*:\s*(\d+)/) || [])[1] || 0);
+if (confirmZ <= 1000) {
+    shareProblems.push("the confirm sheet is behind other modals (#gm-confirm z-index " + confirmZ + ")");
+}
+check("one-time location share and the on-top confirm sheet are wired", shareProblems);
+
 // ------------------------------------------- 14. call screen (dialer-shaped UI)
 // Calls are the one flow a phone user compares against their dialer, so the
 // shape is pinned: a full-screen ringing layer with two answers, a short
