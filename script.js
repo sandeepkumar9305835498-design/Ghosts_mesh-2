@@ -1453,6 +1453,55 @@ window.gmApplyNativeStatus = function (message) {
 // handler below) — used to pick a deterministic fallback suffix.
 let peerIdRetries = 0;
 
+// ===== MESH BROKER FALLBACK =====
+// The app's Online mode rides the PeerJS broker (signalling only — messages
+// still go peer-to-peer). When that broker is down the app should say so
+// instead of crashing, whites-screening, or silently pretending everything is
+// fine. The offline (QR / Wi-Fi) path does NOT depend on this broker at all,
+// so it keeps working regardless of what the internet is doing.
+//
+// Working free brokers are not something we can pin permanently — they change
+// or disappear without notice (the 0.peerjs.com /peers endpoint already
+// returns 404 now). So the config below defaults to the original host but:
+//  1. reads an overrides host/key from index.html meta tags when present, and
+//  2. keeps the ORIGINAL host as a second attempt so a broken override still
+//     falls back to something that used to work.
+// If you want a reliable long-term setup, the documented move is to run your
+// own PeerServer (self-host). See the note at the end of initMesh() and the
+// index.html <meta> docs for the exact env you need.
+const GM_PEERJS_DEFAULT_HOST = "0.peerjs.com";
+const GM_PEERJS_DEFAULT_PORT = "443";
+const GM_PEERJS_DEFAULT_KEY = "peerjs";
+
+function gmMeshBrokerOpts() {
+    // Override host/key via index.html meta tags (single source of truth for
+    // the web build). When set, the old defaults are still kept as a retry
+    // fallback below so a bad override does not hard-break the app.
+    const overrideHost = document.querySelector('meta[name="gm-peer-host"]');
+    const overridePort = document.querySelector('meta[name="gm-peer-port"]');
+    const overrideKey = document.querySelector('meta[name="gm-peer-key"]');
+    if (overrideHost && overrideHost.content) {
+        return {
+            host: overrideHost.content,
+            port: overridePort && overridePort.content ? overridePort.content : GM_PEERJS_DEFAULT_PORT,
+            key: overrideKey && overrideKey.content ? overrideKey.content : GM_PEERJS_DEFAULT_KEY,
+            _tryDefaultsAfter: true
+        };
+    }
+    return { host: GM_PEERJS_DEFAULT_HOST, port: GM_PEERJS_DEFAULT_PORT, key: GM_PEERJS_DEFAULT_KEY, _tryDefaultsAfter: false };
+}
+
+// Showed once when the broker cannot be reached, then silenced for a while so
+// the app does not toast-loop while the internet is flaky.
+let gmMeshBrokerLastError = 0;
+let gmMeshBrokerSilencedUntil = 0;
+function gmMeshBrokerShowProblem(msg) {
+    const now = Date.now();
+    if (now < gmMeshBrokerSilencedUntil) return;
+    showToast(msg);
+    gmMeshBrokerSilencedUntil = now + 15000;
+}
+
 // One STUN list for every RTCPeerConnection the app builds (online PeerJS
 // calls and offline QR/Wi-Fi calls). Without it phones behind carrier-grade
 // NAT never learn a public candidate, ICE never completes, and the call drops
@@ -1465,12 +1514,45 @@ const GM_ICE_SERVERS = [
 ];
 
 function initMesh() {
+    const broker = gmMeshBrokerOpts();
+    const mkOptions = (host, key, port) => ({
+        host,
+        port: port || GM_PEERJS_DEFAULT_PORT,
+        key: key || GM_PEERJS_DEFAULT_KEY,
+        config: { iceServers: GM_ICE_SERVERS },
+        debug: 0
+    });
+
+    function meshBrokerProblem(err, host, key, port) {
+        // This is a broker/signalling issue, not a crash. Tell the user once,
+        // keep the app alive, and let the offline path continue to work.
+        const via = host !== GM_PEERJS_DEFAULT_HOST
+            ? ` (${host})`
+            : "";
+        console.warn("Ghost Mesh mesh broker unavailable" + via + ":", err && err.message || err);
+        gmMeshBrokerShowProblem("Server connecting... (offline chat still works)");
+        document.getElementById("my-ghost-id-label").innerText =
+            userGhostID + " · offline (use WiFi tab)";
+
+        // Retry once with the defaults after a short wait, so a bad custom
+        // host/key (or a temporarily down server) does not leave the app stuck
+        // forever. After that one retry we stop retrying so we never hammer a
+        // dead server or loop toasts.
+        if (!broker._retriedDefaults) {
+            broker._retriedDefaults = true;
+            setTimeout(() => {
+                if (!myPeerInstance || myPeerInstance.disconnected || myPeerInstance.destroyed) {
+                    initMesh();
+                }
+            }, 4000);
+        }
+    }
+
     try {
-        myPeerInstance = new Peer(userGhostID, {
-            config: { iceServers: GM_ICE_SERVERS },
-            debug: 0
-        });
+        myPeerInstance = new Peer(userGhostID, mkOptions(broker.host, broker.key, broker.port));
         myPeerInstance.on('open', id => {
+            // Clear any earlier broker problem state now that we connected.
+            gmMeshBrokerSilencedUntil = 0;
             document.getElementById("my-ghost-id-label").innerText = id;
             showToast("Ghost Mesh Live: " + id);
             startAutoReconnectKnownPeers();
@@ -1499,13 +1581,33 @@ function initMesh() {
                     updateHeaderDisplay();
                     initMesh();
                 }
-            } else if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error' || !navigator.onLine) {
+            } else if (err.type === 'network' || err.type === 'server-error' ||
+                       err.type === 'socket-error' || err.type === 'ssl-unavailable' ||
+                       !navigator.onLine) {
                 // Online (PeerJS cloud) signaling couldn't be reached — normal
-                // when offline. Offline WiFi/QR mode is unaffected by this.
-                document.getElementById("my-ghost-id-label").innerText = userGhostID + " · offline (use WiFi tab)";
+                // when offline, flaky, or when the chosen broker endpoint is down.
+                // Offline WiFi/QR mode is unaffected by this.
+                meshBrokerProblem(err, broker.host, broker.key, broker.port);
             }
         });
-    } catch(e) { console.error(e); }
+    } catch(e) {
+        // Peer() itself threw (very rare — e.g. WebRTC unsupported). Treat it
+        // like a broker problem rather than crashing the page.
+        console.error(e);
+        meshBrokerProblem(e, broker.host, broker.key, broker.port);
+    }
+
+    // Self-hosting note (only in console, never shown to end users unless the
+    // broker is actually down): if you want a stable public broker for this app,
+    // run your own PeerServer instead of relying on a free hosted one. A minimal
+    // deploy is a small Node service on Render/Railway/etc. using the
+    // `peerjs-server` package, with wss on 443 and a fixed API `key`.
+    // Then set these meta tags in index.html:
+    //   <meta name="gm-peer-host" content="your-server.example.com">
+    //   <meta name="gm-peer-port" content="443">
+    //   <meta name="gm-peer-key" content="your-api-key">
+    // The app reads those at runtime via gmMeshBrokerOpts() and still falls back
+    // to the defaults once if the override fails.
 }
 
 // ===== AUTO-RECONNECT TO KNOWN CONTACTS =====
