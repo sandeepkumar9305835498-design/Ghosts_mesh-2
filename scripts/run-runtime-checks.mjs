@@ -592,6 +592,32 @@ window.closeBlockedList();
     ok("the chat menu no longer offers continuous location sharing",
         !/Share Location/.test(menu.textContent) && typeof window.shareLiveLocation === "undefined",
         menu.textContent.trim().replace(/\s+/g, " ").slice(0, 90));
+
+    // A ONE-TIME pin is still a real feature: the attach menu asks the device
+    // for a fix and posts an ordinary location card (Maps + radar).
+    const attach = doc.getElementById("attach-menu");
+    ok("the attach menu offers a one-time location share",
+        /Location/.test(attach.textContent) && /shareCurrentLocation\(\)/.test(attach.innerHTML));
+    let geoAsked = 0;
+    Object.defineProperty(window.navigator, "geolocation", {
+        configurable: true,
+        value: {
+            getCurrentPosition(done) {
+                geoAsked++;
+                done({ coords: { latitude: 28.6139, longitude: 77.209 } });
+            }
+        }
+    });
+    window.shareCurrentLocation();
+    await new Promise(r => setTimeout(r, 20));
+    const locCard = doc.querySelector("#messages-container .location-card");
+    ok("sharing a location asks the device once and posts a location card",
+        geoAsked === 1 && !!locCard, "asked=" + geoAsked + " card=" + !!locCard);
+    ok("the location card carries the real coordinates and both map buttons",
+        !!locCard && /28\.6139, 77\.2090/.test(locCard.textContent) &&
+        /Google Maps/.test(locCard.textContent) && /Radar Map/.test(locCard.textContent),
+        locCard ? locCard.textContent.replace(/\s+/g, " ").slice(0, 90) : "(none)");
+    Object.defineProperty(window.navigator, "geolocation", { configurable: true, value: undefined });
     window.goBackToList();
 }
 
