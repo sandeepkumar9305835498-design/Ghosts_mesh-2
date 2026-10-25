@@ -1138,6 +1138,57 @@ ok("the right PIN unlocks the idle-locked app",
         sent.length === 1 && sent[0] === JSON.stringify({ type: "ping" }), sent.join(","));
 }
 
+// ---------------------------------------- broker config / lobby discovery
+// The public PeerJS cloud broker does not implement the peer list
+// (`GET https://0.peerjs.com/peerjs/peers` answers 404), so polling it only
+// spammed the console and never found anybody. The app must poll only a
+// self-hosted broker, and every peer connection must carry STUN + TURN.
+{
+    const iceList = JSON.parse(window.eval("JSON.stringify(GM_ICE_SERVERS)"));
+    const urls = iceList.flatMap(e => (Array.isArray(e.urls) ? e.urls : [e.urls]));
+    ok("Google STUN is configured for peer connections",
+        urls.includes("stun:stun.l.google.com:19302") && urls.includes("stun:stun1.l.google.com:19302"),
+        urls.join(","));
+    ok("a TURN relay is configured so carrier NAT cannot block the link",
+        urls.some(u => String(u).startsWith("turn:")), urls.join(","));
+
+    const fetched = [];
+    const realFetch = window.fetch;
+    // Keep the live Peer instance so the rest of the suite is unaffected.
+    window.eval("window.__gmSavedPeer = myPeerInstance;");
+    window.fetch = url => {
+        fetched.push(String(url));
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve([]) });
+    };
+
+    window.eval("startLobbyDiscovery()");
+    ok("the public broker's /peers endpoint is never polled",
+        !fetched.some(u => u.includes("0.peerjs.com")), fetched.join(","));
+
+    // A self-hosted broker with discovery enabled is allowed to be polled.
+    const hostMeta = doc.createElement("meta");
+    hostMeta.name = "gm-peer-host";
+    hostMeta.content = "peer.example.com";
+    const discoveryMeta = doc.createElement("meta");
+    discoveryMeta.name = "gm-peer-discovery";
+    discoveryMeta.content = "on";
+    doc.head.appendChild(hostMeta);
+    doc.head.appendChild(discoveryMeta);
+    window.eval("myPeerInstance = { id: 'Ghost-LOBBY', options: { host: 'peer.example.com', port: '443', key: 'ghostmesh' } };");
+    window.eval("startLobbyDiscovery()");
+    ok("a self-hosted broker is polled at its own host",
+        fetched.includes("https://peer.example.com:443/ghostmesh/peers"), fetched.join(","));
+
+    window.eval("gmStopLobbyDiscovery();");
+    hostMeta.remove();
+    discoveryMeta.remove();
+    window.eval("myPeerInstance = window.__gmSavedPeer; window.__gmSavedPeer = undefined;");
+    window.fetch = realFetch;
+    ok("lobby polling stops without leaking an interval",
+        window.eval("gmStopLobbyDiscovery(); lobbyPollInterval") === null,
+        String(window.eval("lobbyPollInterval")));
+}
+
 // ---------------------------------------------- nothing logged an error
 // The boot check above only covers first paint; this one covers every flow the
 // suite walked — the map, the radios, the sponsor break and the photo adjuster

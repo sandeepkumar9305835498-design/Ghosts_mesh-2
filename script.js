@@ -857,19 +857,57 @@ function openOnlineUsers() {
     showScreen("online-screen");
 }
 function closeOnlineScreen() { showScreen("chatlist-screen"); }
-// ===== LOBBY DISCOVERY =====
-// No dedicated backend: PeerJS's own free cloud broker (the same one myPeerInstance
-// already talks to for signaling) exposes a "who's currently connected" list for its
-// default key. We poll that list so ANY two people with the app open can see and
-// connect to each other, not just people who already know each other's Ghost ID.
-function pollLobbyDiscovery() {
-    if (!myPeerInstance || !myPeerInstance.id) return;
+// ===== LOBBY DISCOVERY (self-hosted broker only) =====
+//
+// PeerJS's public cloud broker does NOT allow listing peers. `GET
+// https://0.peerjs.com/peerjs/peers` answers 404 (listing has to be enabled by
+// PeerJS per API key, and the public cloud key does not have it). Polling it
+// every 12s only spammed the console with 404s and never discovered anyone, so
+// it is switched OFF for the public cloud.
+//
+// The endpoint DOES work on a PeerServer you host yourself with
+// `allow_discovery: true` (see docs/PEERJS-SELF-HOST.md). Polling is therefore
+// enabled only when BOTH are true:
+//   1. <meta name="gm-peer-host"> points at your own broker, and
+//   2. <meta name="gm-peer-discovery" content="on"> opts in.
+// Without your own server the Online screen is built from real data only:
+// active connections, phones found over BLE / Wi-Fi Direct, and known Ghost IDs
+// that auto-reconnect in the background.
+function gmLobbyDiscoveryEnabled() {
+    if (!myPeerInstance || !myPeerInstance.id) return false;
+    const meta = document.querySelector('meta[name="gm-peer-discovery"]');
+    if (!meta || String(meta.content || "").toLowerCase() !== "on") return false;
     const opts = myPeerInstance.options || {};
-    const host = opts.host || "0.peerjs.com";
+    // Never poll the shared public broker: it answers 404 for the peer list.
+    return !!opts.host && opts.host !== GM_PEERJS_DEFAULT_HOST;
+}
+
+function gmStopLobbyDiscovery() {
+    if (lobbyPollInterval) {
+        clearInterval(lobbyPollInterval);
+        lobbyPollInterval = null;
+    }
+}
+
+function pollLobbyDiscovery() {
+    if (!gmLobbyDiscoveryEnabled()) { gmStopLobbyDiscovery(); return; }
+    const opts = myPeerInstance.options || {};
     const port = opts.port ? (":" + opts.port) : "";
-    const key = opts.key || "peerjs";
-    const url = `https://${host}${port}/${key}/peers`;
-    fetch(url).then(r => r.ok ? r.json() : []).then(ids => {
+    const key = opts.key || GM_PEERJS_DEFAULT_KEY;
+    // A self-hosted server mounted under a path (e.g. /peerjs) needs that path
+    // in the request; the cloud broker defaults to "/".
+    const path = (opts.path && opts.path !== "/") ? String(opts.path).replace(/\/+$/, "") : "";
+    const url = `https://${opts.host}${port}${path}/${key}/peers`;
+    fetch(url, { cache: "no-store" }).then(r => {
+        if (!r.ok) {
+            // 401 = discovery not enabled on that server. Stop polling instead
+            // of hammering it with failing requests.
+            console.warn("Lobby discovery unavailable (" + r.status + ") — using connections + nearby peers instead");
+            gmStopLobbyDiscovery();
+            return [];
+        }
+        return r.json();
+    }).then(ids => {
         if (!Array.isArray(ids)) return;
         ids.forEach(id => {
             if (id && id !== userGhostID && !blockedPeers.has(id)) {
@@ -884,11 +922,15 @@ function pollLobbyDiscovery() {
             }
         });
         renderOnlineUsers();
-    }).catch(() => { /* broker discovery unavailable — silently skip, mesh presence still works */ });
+    }).catch(() => { /* network hiccup — the next tick retries, nothing breaks */ });
 }
 
 function startLobbyDiscovery() {
     if (lobbyPollInterval) return;
+    if (!gmLobbyDiscoveryEnabled()) {
+        // No self-hosted broker configured: nothing to poll, and no 404 noise.
+        return;
+    }
     pollLobbyDiscovery();
     lobbyPollInterval = setInterval(pollLobbyDiscovery, 12000);
 }
@@ -1505,15 +1547,65 @@ function gmMeshBrokerShowProblem(msg) {
     gmMeshBrokerSilencedUntil = now + 15000;
 }
 
-// One STUN list for every RTCPeerConnection the app builds (online PeerJS
-// calls and offline QR/Wi-Fi calls). Without it phones behind carrier-grade
-// NAT never learn a public candidate, ICE never completes, and the call drops
-// the moment it is answered.
+// ===== BROKER RECONNECT =====
+// PeerJS drops its signalling socket on every network change (Wi-Fi <-> mobile
+// data, tunnel, screen off) and it does NOT come back by itself. Before this the
+// header kept showing the Ghost ID as if everything was fine while nothing could
+// actually reach the phone. Now the app says "Connecting..." and retries with a
+// backoff, so a flaky network recovers on its own and never throws.
+let gmBrokerReconnectAttempts = 0;
+let gmBrokerReconnectTimer = null;
+const GM_BROKER_RECONNECT_MAX_MS = 30000;
+
+function gmScheduleBrokerReconnect(reason) {
+    if (typeof isGhostMode !== "undefined" && isGhostMode) return;
+    if (gmBrokerReconnectTimer) return;
+    if (!navigator.onLine) return;   // the "online" listener below picks it up
+    const attempt = ++gmBrokerReconnectAttempts;
+    const delay = Math.min(GM_BROKER_RECONNECT_MAX_MS, 3000 * attempt);
+    gmBrokerReconnectTimer = setTimeout(() => {
+        gmBrokerReconnectTimer = null;
+        const peer = myPeerInstance;
+        try {
+            if (!peer || peer.destroyed) { initMesh(); return; }
+            if (peer.disconnected) peer.reconnect();
+            else if (!peer.open) initMesh();
+        } catch (e) {
+            console.warn("Broker reconnect failed, rebuilding the connection:", e && e.message);
+            initMesh();
+        }
+    }, delay);
+    console.warn("Mesh broker reconnect scheduled in " + (delay / 1000) + "s (" + reason + ")");
+}
+
+window.addEventListener("online", () => {
+    gmBrokerReconnectAttempts = 0;
+    gmScheduleBrokerReconnect("back online");
+});
+
+// One ICE config for every RTCPeerConnection the app builds (online PeerJS
+// calls and offline QR/Wi-Fi calls).
+//
+// STUN alone is not enough on Indian mobile data: most carriers use
+// carrier-grade NAT, so two phones on mobile data can exchange public addresses
+// but still cannot punch a hole to each other. Without a relay ICE fails and the
+// call/message never arrives. So:
+//   - Google's public STUN (free, no key) discovers the public address, and
+//   - PeerJS's public TURN relay (free, the same one its own default config
+//     ships with) relays the media/data when a direct path is impossible.
 const GM_ICE_SERVERS = [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" },
-    { urls: "stun:stun2.l.google.com:19302" },
-    { urls: "stun:global.stun.twilio.com:3478" }
+    {
+        urls: [
+            "stun:stun.l.google.com:19302",
+            "stun:stun1.l.google.com:19302",
+            "stun:stun2.l.google.com:19302"
+        ]
+    },
+    {
+        urls: ["turn:eu-0.turn.peerjs.com:3478", "turn:us-0.turn.peerjs.com:3478"],
+        username: "peerjs",
+        credential: "peerjsp"
+    }
 ];
 
 function initMesh() {
@@ -1549,6 +1641,10 @@ function initMesh() {
                 }
             }, 4000);
         }
+        // Keep trying in the background with a backoff: a mobile network that
+        // drops and comes back should heal on its own, without the person
+        // closing and reopening the app.
+        gmScheduleBrokerReconnect("broker unavailable");
     }
 
     try {
@@ -1556,6 +1652,8 @@ function initMesh() {
         myPeerInstance.on('open', id => {
             // Clear any earlier broker problem state now that we connected.
             gmMeshBrokerSilencedUntil = 0;
+            gmBrokerReconnectAttempts = 0;
+            if (gmBrokerReconnectTimer) { clearTimeout(gmBrokerReconnectTimer); gmBrokerReconnectTimer = null; }
             document.getElementById("my-ghost-id-label").innerText = id;
             showToast("Ghost Mesh Live: " + id);
             startAutoReconnectKnownPeers();
@@ -1573,6 +1671,20 @@ function initMesh() {
             handleIncomingRequest(conn); setupConn(conn);
         });
         myPeerInstance.on('call', call => handleIncomingCall(call));
+        myPeerInstance.on('disconnected', () => {
+            // Socket lost (network switch, sleep, flaky data). Say "Connecting..."
+            // and retry instead of looking online while nobody can reach us.
+            if (document.getElementById("my-ghost-id-label")) {
+                document.getElementById("my-ghost-id-label").innerText =
+                    userGhostID + " · connecting…";
+            }
+            gmMeshBrokerShowProblem("Connecting… (offline chat still works)");
+            gmScheduleBrokerReconnect("disconnected");
+        });
+        myPeerInstance.on('close', () => {
+            gmBrokerReconnectAttempts = 0;
+            gmScheduleBrokerReconnect("closed");
+        });
         myPeerInstance.on('error', err => {
             if (err.type === 'unavailable-id') {
                 // A Ghost ID is now derived from the recovery seed, so it must
