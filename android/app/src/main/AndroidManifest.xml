@@ -50,6 +50,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
+    <!-- AdMob: advertising id access. On Android 13+ this permission would be
+         removed automatically by the SDK merge if it were missing, and ads
+         would serve with no targeting at all. -->
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID" />
+
     <!-- Optional hardware, so the app also installs on devices without them -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
@@ -68,6 +73,14 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.GhostMesh">
+
+        <!-- AdMob app id. The SDK reads this exact meta-data key; when it is
+             missing MobileAds.initialize() never calls back and every ad
+             silently never loads ("ads just do not appear"). Must be the
+             APPLICATION id (tilde ~), not a unit id (slash /). -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-8808521207954078~9122584573" />
 
         <activity
             android:name=".MainActivity"

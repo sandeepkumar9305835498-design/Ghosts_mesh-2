@@ -5,12 +5,16 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.Message;
 import android.util.Log;
+import android.webkit.JavascriptInterface;
 import android.webkit.ConsoleMessage;
 import android.webkit.GeolocationPermissions;
 import android.webkit.JsPromptResult;
@@ -26,6 +30,7 @@ import android.webkit.WebView;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.Toast;
 
 import androidx.activity.OnBackPressedCallback;
@@ -45,11 +50,26 @@ import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.webkit.WebViewAssetLoader;
 import androidx.webkit.WebViewClientCompat;
 
+import com.google.android.gms.ads.AdError;
+import com.google.android.gms.ads.AdListener;
+import com.google.android.gms.ads.AdRequest;
+import com.google.android.gms.ads.AdSize;
+import com.google.android.gms.ads.AdView;
+import com.google.android.gms.ads.FullScreenContentCallback;
+import com.google.android.gms.ads.LoadAdError;
+import com.google.android.gms.ads.MobileAds;
+import com.google.android.gms.ads.initialization.AdapterStatus;
+import com.google.android.gms.ads.interstitial.InterstitialAd;
+import com.google.android.gms.ads.interstitial.InterstitialAdLoadCallback;
+import com.google.android.gms.ads.rewarded.RewardedAd;
+import com.google.android.gms.ads.rewarded.RewardedAdLoadCallback;
+
 import org.json.JSONArray;
 import org.json.JSONException;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Hosts the Ghost Mesh web app (index.html / script.js / style.css, packaged
@@ -91,6 +111,46 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
     private String nativeGhostId = "";
     private String nativeDisplayName = "";
 
+    // ------------------------------------------------------------------
+    // AdMob
+    //
+    // Google does not allow AdMob units inside a WebView, so every ad in the
+    // APK is a real native view behind window.Android (see AndroidBridge at the
+    // bottom). script.js asks isNativeAdsAvailable() first and only falls back
+    // to its own house ad when this class is not there.
+    //
+    // The app id (ca-app-pub-…~…) lives in AndroidManifest.xml as
+    // com.google.android.gms.ads.APPLICATION_ID. Without that meta-data
+    // MobileAds.initialize() silently never calls back and no ad ever loads.
+    // ------------------------------------------------------------------
+    /** Google's official test units: always fill, safe to ship in any build. */
+    private static final String TEST_BANNER_UNIT_ID = "ca-app-pub-3940256099942544/6300978111";
+    private static final String TEST_INTERSTITIAL_UNIT_ID = "ca-app-pub-3940256099942544/1033173712";
+    private static final String TEST_REWARDED_UNIT_ID = "ca-app-pub-3940256099942544/5224354917";
+
+    /**
+     * Real unit ids from the AdMob console (Apps → Ghost Mesh → Ad units).
+     * They look like ca-app-pub-8808521207954078/1234567890 (slash, not tilde).
+     * While these are empty the official test units above are used, so the
+     * ad slots still fill instead of staying blank.
+     */
+    private static final String BANNER_UNIT_ID = "";
+    private static final String INTERSTITIAL_UNIT_ID = "";
+    private static final String REWARDED_UNIT_ID = "";
+
+    private static final long AD_RETRY_MIN_MS = 15_000L;
+    private static final long AD_RETRY_MAX_MS = 120_000L;
+    private static final int AD_MAX_ATTEMPTS = 8;
+
+    private FrameLayout adContainer;
+    private AdView adView;
+    private RewardedAd rewardedAd;
+    private InterstitialAd interstitialAd;
+    private boolean adsStarted = false, adsInitialized = false, bannerAllowed = true, bannerLoaded = false;
+    private boolean loadingRewarded = false, loadingInterstitial = false, pendingRewarded = false;
+    private int bannerAttempts = 0, rewardedAttempts = 0, interstitialAttempts = 0;
+    private final Handler adHandler = new Handler(Looper.getMainLooper());
+
     private final ServiceConnection meshConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
@@ -108,21 +168,30 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
         }
     };
 
-    /** Asks for the radio permissions if needed, then starts the service. */
+    /**
+     * Asks for the radio permissions if needed, then starts the service.
+     *
+     * Only the *discovery* permissions decide whether discovery may start:
+     * notifications were part of the same batch before, so declining the
+     * notification prompt (very common) left nearby discovery permanently off
+     * even though Bluetooth and Wi-Fi had been allowed.
+     */
     private final ActivityResultLauncher<String[]> meshPermissionLauncher =
             registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), result -> {
-                boolean grantedAll = !result.isEmpty();
-                for (Boolean granted : result.values()) {
-                    if (granted == null || !granted) grantedAll = false;
-                }
-                if (grantedAll) {
+                if (missingEssentialMeshPermissions().length == 0) {
                     startMeshService();
-                } else {
-                    pushNativeStatus("Bluetooth / Wi-Fi Direct permission denied — QR pairing still works");
+                    return;
                 }
+                if (!anyPermissionCanStillBeAsked(essentialMeshPermissions())) {
+                    pushNativeStatus("Nearby devices are blocked in Settings — tap to allow them");
+                    showNearbyPermissionDialog();
+                    return;
+                }
+                pushNativeStatus("Bluetooth / Wi-Fi Direct permission denied — QR pairing still works");
             });
 
-    private String[] allMeshPermissions() {
+    /** The permissions discovery genuinely needs (notifications are optional). */
+    private String[] essentialMeshPermissions() {
         List<String> needed = new ArrayList<>();
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
             needed.add(Manifest.permission.BLUETOOTH_SCAN);
@@ -135,17 +204,40 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
         }
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             needed.add(Manifest.permission.NEARBY_WIFI_DEVICES);
-            needed.add(Manifest.permission.POST_NOTIFICATIONS);
         }
         return needed.toArray(new String[0]);
     }
 
-    private String[] missingMeshPermissions() {
+    /** Nice to have: without it the discovery notification is hidden. */
+    private String[] optionalMeshPermissions() {
+        List<String> optional = new ArrayList<>();
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU
+                && !hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
+            optional.add(Manifest.permission.POST_NOTIFICATIONS);
+        }
+        return optional.toArray(new String[0]);
+    }
+
+    private String[] missingEssentialMeshPermissions() {
         List<String> missing = new ArrayList<>();
-        for (String permission : allMeshPermissions()) {
+        for (String permission : essentialMeshPermissions()) {
             if (!hasPermission(permission)) missing.add(permission);
         }
         return missing.toArray(new String[0]);
+    }
+
+    /** True while Android would still show a system prompt for these. */
+    private boolean anyPermissionCanStillBeAsked(String[] permissions) {
+        for (String permission : permissions) {
+            if (androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(this, permission)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private android.content.SharedPreferences nativePrefs() {
+        return getSharedPreferences("gm_native", MODE_PRIVATE);
     }
 
     /** Called from the GhostNative bridge (always on the UI thread). */
@@ -154,12 +246,100 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
             pushNativeStatus("This device has no Bluetooth LE or Wi-Fi Direct");
             return;
         }
-        String[] missing = missingMeshPermissions();
-        if (missing.length > 0) {
-            meshPermissionLauncher.launch(missing);
+        String[] missing = missingEssentialMeshPermissions();
+        if (missing.length == 0) {
+            nativePrefs().edit().putBoolean("mesh_enabled", true).apply();
+            startMeshService();
             return;
         }
-        startMeshService();
+        // First ever tap: ask. After a "Don't allow", Android stops showing the
+        // prompt, so send the person to Settings instead of doing nothing.
+        boolean askedBefore = nativePrefs().getBoolean("mesh_perm_asked", false);
+        if (askedBefore && !anyPermissionCanStillBeAsked(essentialMeshPermissions())) {
+            pushNativeStatus("Nearby devices are blocked in Settings — tap to allow them");
+            showNearbyPermissionDialog();
+            return;
+        }
+        nativePrefs().edit().putBoolean("mesh_perm_asked", true).apply();
+        nativePrefs().edit().putBoolean("mesh_enabled", true).apply();
+        List<String> request = new ArrayList<>();
+        for (String permission : missing) request.add(permission);
+        for (String permission : optionalMeshPermissions()) request.add(permission);
+        meshPermissionLauncher.launch(request.toArray(new String[0]));
+    }
+
+    /** Explains where to fix a permanently denied permission. */
+    private void showNearbyPermissionDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.mesh_permission_title)
+                .setMessage(R.string.mesh_permission_message)
+                .setPositiveButton(R.string.mesh_open_settings, (dialog, which) -> openAppSettings())
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    public void openAppSettings() {
+        try {
+            Intent intent = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:" + getPackageName()));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        } catch (Exception e) {
+            Log.w(TAG, "Could not open app settings", e);
+        }
+    }
+
+    /** Bluetooth radio state, permission-safe. */
+    public boolean isBluetoothEnabled() {
+        android.bluetooth.BluetoothManager manager =
+                (android.bluetooth.BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+        android.bluetooth.BluetoothAdapter adapter = manager == null ? null : manager.getAdapter();
+        if (adapter == null) return false;
+        try {
+            return adapter.isEnabled();
+        } catch (SecurityException e) {
+            return false;
+        }
+    }
+
+    /** Wi-Fi state: Wi-Fi Direct discovery needs the Wi-Fi radio on. */
+    public boolean isWifiEnabled() {
+        try {
+            android.net.wifi.WifiManager wifi =
+                    (android.net.wifi.WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            return wifi != null && wifi.isWifiEnabled();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Everything that can make the nearby list empty, as JSON —
+     * window.gmMeshDiag() in the WebView console prints it.
+     */
+    public String nativeMeshDiagnostics() {
+        try {
+            org.json.JSONObject permissions = new org.json.JSONObject();
+            for (String permission : essentialMeshPermissions()) {
+                permissions.put(permission.substring(permission.lastIndexOf('.') + 1), hasPermission(permission));
+            }
+            org.json.JSONObject json = new org.json.JSONObject()
+                    .put("platform", "android")
+                    .put("supported", isNativeMeshSupported())
+                    .put("bluetoothEnabled", isBluetoothEnabled())
+                    .put("wifiEnabled", isWifiEnabled())
+                    .put("serviceRunning", meshBound && meshService != null)
+                    .put("peerCount", meshService == null ? 0 : meshService.snapshotPeers().size())
+                    .put("permissions", permissions);
+            if (meshService != null) {
+                json.put("bleAdvertising", meshService.isBleAdvertising())
+                        .put("bleScanning", meshService.isBleScanning())
+                        .put("wifiDiscovering", meshService.isWifiDiscovering());
+            }
+            return json.toString();
+        } catch (Throwable t) {
+            return "{\"error\":\"diagnostics failed\"}";
+        }
     }
 
     private void startMeshService() {
@@ -169,7 +349,12 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
                 meshBound = true;
             }
             GhostMeshService.start(this);
-            pushNativeStatus("Looking for nearby Ghosts over Bluetooth + Wi-Fi Direct");
+            // The service may already be up (second call): push the identity
+            // straight in so advertised packets carry the real Ghost ID.
+            if (meshService != null) meshService.setIdentity(nativeGhostId, nativeDisplayName);
+            if (!isBluetoothEnabled()) pushNativeStatus("Turn Bluetooth on to see nearby Ghosts");
+            else if (!isWifiEnabled()) pushNativeStatus("Turn Wi-Fi on for Wi-Fi Direct discovery");
+            else pushNativeStatus("Looking for nearby Ghosts over Bluetooth + Wi-Fi Direct");
         } catch (Exception e) {
             Log.w(TAG, "Could not start the mesh service", e);
             pushNativeStatus("Could not start nearby discovery");
@@ -178,6 +363,7 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
 
     /** Called from the GhostNative bridge (always on the UI thread). */
     public void requestNativeMeshStop() {
+        nativePrefs().edit().putBoolean("mesh_enabled", false).apply();
         try {
             GhostMeshService.stop(this);
         } catch (Exception e) {
@@ -334,6 +520,10 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
 
         applySystemBarInsets();
 
+        // Banner slot lives under the WebView; initAds() starts MobileAds and
+        // requests the first banner as soon as the SDK is ready.
+        initAds();
+
         webView = findViewById(R.id.webview);
         configureWebView();
         setupBackHandling();
@@ -341,6 +531,8 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
         // window.GhostNative — the only native surface the page can reach.
         nativeBridge = new GhostNativeBridge(this);
         webView.addJavascriptInterface(nativeBridge, "GhostNative");
+        // window.Android — the AdMob bridge script.js already calls.
+        webView.addJavascriptInterface(new AndroidBridge(), "Android");
 
         if (savedInstanceState == null) {
             webView.loadUrl(START_URL);
@@ -569,6 +761,412 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
     }
 
     // ------------------------------------------------------------------
+    // AdMob
+    // ------------------------------------------------------------------
+    private String bannerUnitId() { return pickUnit(BANNER_UNIT_ID, TEST_BANNER_UNIT_ID); }
+    private String interstitialUnitId() { return pickUnit(INTERSTITIAL_UNIT_ID, TEST_INTERSTITIAL_UNIT_ID); }
+    private String rewardedUnitId() { return pickUnit(REWARDED_UNIT_ID, TEST_REWARDED_UNIT_ID); }
+
+    /** Real unit when one is configured, otherwise Google's test unit. */
+    private String pickUnit(String real, String test) {
+        return (real == null || real.trim().isEmpty()) ? test : real.trim();
+    }
+
+    private void initAds() {
+        if (adContainer == null) adContainer = findViewById(R.id.ad_container);
+        if (adsStarted) return;
+        adsStarted = true;
+        if (!adMobAppIdConfigured()) {
+            Log.e(TAG, "AdMob APPLICATION_ID meta-data is missing/wrong in AndroidManifest.xml — ads disabled");
+            return;
+        }
+        Log.i(TAG, "AdMob units → banner=" + bannerUnitId()
+                + " rewarded=" + rewardedUnitId()
+                + " interstitial=" + interstitialUnitId());
+        try {
+            MobileAds.initialize(this, initializationStatus -> {
+                adsInitialized = true;
+                for (Map.Entry<String, AdapterStatus> entry
+                        : initializationStatus.getAdapterStatusMap().entrySet()) {
+                    Log.i(TAG, "AdMob adapter " + entry.getKey() + " = "
+                            + entry.getValue().getInitializationState()
+                            + " " + entry.getValue().getDescription());
+                }
+                loadBanner();
+                loadRewarded();
+                loadInterstitial();
+            });
+        } catch (Throwable t) {
+            Log.e(TAG, "AdMob could not initialise — check the APPLICATION_ID meta-data", t);
+        }
+    }
+
+    /** Reads the AdMob app id from the manifest, the way the SDK does. */
+    private boolean adMobAppIdConfigured() {
+        try {
+            ApplicationInfo info = getPackageManager()
+                    .getApplicationInfo(getPackageName(), PackageManager.GET_META_DATA);
+            String id = info.metaData == null ? null
+                    : info.metaData.getString("com.google.android.gms.ads.APPLICATION_ID");
+            boolean looksRight = id != null && id.startsWith("ca-app-pub-") && id.contains("~");
+            if (!looksRight) Log.e(TAG, "Bad AdMob app id: " + id);
+            return looksRight;
+        } catch (Throwable t) {
+            Log.e(TAG, "Could not read the AdMob app id", t);
+            return false;
+        }
+    }
+
+    /** 15s, 30s, 60s, 120s, 120s … */
+    private long adRetryDelay(int attempts) {
+        long delay = AD_RETRY_MIN_MS * (1L << Math.min(Math.max(attempts - 1, 0), 4));
+        return Math.min(AD_RETRY_MAX_MS, delay);
+    }
+
+    /** Runs JS in the page, ignoring a page that is not ready yet. */
+    private void jsCallback(String script) {
+        if (webView == null) return;
+        runOnUiThread(() -> {
+            if (webView == null) return;
+            try {
+                webView.evaluateJavascript(script, null);
+            } catch (Throwable t) {
+                Log.w(TAG, "JS callback failed: " + script, t);
+            }
+        });
+    }
+
+    private void loadBanner() {
+        if (adContainer == null) {
+            Log.w(TAG, "Banner skipped: activity_main.xml has no @+id/ad_container");
+            return;
+        }
+        if (!adsInitialized) return;
+        if (bannerAttempts >= AD_MAX_ATTEMPTS) {
+            Log.w(TAG, "Banner gave up after " + bannerAttempts + " attempts");
+            return;
+        }
+        bannerAttempts++;
+        try {
+            if (adView != null) {
+                adContainer.removeAllViews();
+                adView.destroy();
+                adView = null;
+            }
+            bannerLoaded = false;
+            adView = new AdView(this);
+            adView.setAdUnitId(bannerUnitId());
+            adView.setAdSize(AdSize.BANNER);
+            adView.setAdListener(new AdListener() {
+                @Override
+                public void onAdLoaded() {
+                    bannerAttempts = 0;
+                    bannerLoaded = true;
+                    Log.i(TAG, "Banner loaded");
+                    if (adContainer != null && bannerAllowed) adContainer.setVisibility(View.VISIBLE);
+                }
+
+                @Override
+                public void onAdFailedToLoad(@NonNull LoadAdError adError) {
+                    // 0 internal, 1 invalid request, 2 network, 3 no fill,
+                    // 8 invalid ad unit id — 3 is normal for a brand-new app.
+                    Log.w(TAG, "Banner failed [" + adError.getCode() + "/" + adError.getDomain()
+                            + "]: " + adError.getMessage());
+                    bannerLoaded = false;
+                    if (adContainer != null) adContainer.setVisibility(View.GONE);
+                    long delay = adRetryDelay(bannerAttempts);
+                    adHandler.postDelayed(MainActivity.this::loadBanner, delay);
+                }
+            });
+            adContainer.removeAllViews();
+            adContainer.addView(adView);
+            adView.loadAd(new AdRequest.Builder().build());
+        } catch (Throwable t) {
+            Log.w(TAG, "Banner setup failed", t);
+        }
+    }
+
+    private void loadRewarded() {
+        if (!adsInitialized || rewardedAd != null || loadingRewarded) return;
+        if (rewardedAttempts >= AD_MAX_ATTEMPTS) {
+            Log.w(TAG, "Rewarded gave up after " + rewardedAttempts + " attempts");
+            return;
+        }
+        rewardedAttempts++;
+        loadingRewarded = true;
+        try {
+            RewardedAd.load(this, rewardedUnitId(), new AdRequest.Builder().build(),
+                    new RewardedAdLoadCallback() {
+                        @Override
+                        public void onAdLoaded(@NonNull RewardedAd ad) {
+                            loadingRewarded = false;
+                            rewardedAttempts = 0;
+                            rewardedAd = ad;
+                            Log.i(TAG, "Rewarded loaded");
+                            ad.setFullScreenContentCallback(new FullScreenContentCallback() {
+                                @Override
+                                public void onAdShowedFullScreenContent() {
+                                    Log.i(TAG, "Rewarded showing");
+                                    setBannerVisible(false);
+                                }
+
+                                @Override
+                                public void onAdDismissedFullScreenContent() {
+                                    rewardedAd = null;
+                                    setBannerVisible(true);
+                                    jsCallback("window.gmOnAdClosed && window.gmOnAdClosed('rewarded')");
+                                    loadRewarded();
+                                }
+
+                                @Override
+                                public void onAdFailedToShowFullScreenContent(@NonNull AdError adError) {
+                                    Log.w(TAG, "Rewarded show failed: " + adError.getMessage());
+                                    rewardedAd = null;
+                                    pendingRewarded = false;
+                                    setBannerVisible(true);
+                                    jsCallback("window.gmOnAdFailed && window.gmOnAdFailed()");
+                                    loadRewarded();
+                                }
+                            });
+                            if (pendingRewarded) {
+                                pendingRewarded = false;
+                                showRewardedAd();
+                            }
+                        }
+
+                        @Override
+                        public void onAdFailedToLoad(@NonNull LoadAdError adError) {
+                            loadingRewarded = false;
+                            rewardedAd = null;
+                            Log.w(TAG, "Rewarded failed [" + adError.getCode() + "/" + adError.getDomain()
+                                    + "]: " + adError.getMessage());
+                            if (pendingRewarded) {
+                                pendingRewarded = false;
+                                jsCallback("window.gmOnAdFailed && window.gmOnAdFailed()");
+                            }
+                            long delay = adRetryDelay(rewardedAttempts);
+                            adHandler.postDelayed(MainActivity.this::loadRewarded, delay);
+                        }
+                    });
+        } catch (Throwable t) {
+            loadingRewarded = false;
+            Log.w(TAG, "Rewarded load crashed", t);
+        }
+    }
+
+    private void loadInterstitial() {
+        if (!adsInitialized || interstitialAd != null || loadingInterstitial) return;
+        if (interstitialAttempts >= AD_MAX_ATTEMPTS) return;
+        interstitialAttempts++;
+        loadingInterstitial = true;
+        try {
+            InterstitialAd.load(this, interstitialUnitId(), new AdRequest.Builder().build(),
+                    new InterstitialAdLoadCallback() {
+                        @Override
+                        public void onAdLoaded(@NonNull InterstitialAd ad) {
+                            loadingInterstitial = false;
+                            interstitialAttempts = 0;
+                            interstitialAd = ad;
+                            Log.i(TAG, "Interstitial loaded");
+                            ad.setFullScreenContentCallback(new FullScreenContentCallback() {
+                                @Override
+                                public void onAdDismissedFullScreenContent() {
+                                    interstitialAd = null;
+                                    setBannerVisible(true);
+                                    loadInterstitial();
+                                }
+
+                                @Override
+                                public void onAdFailedToShowFullScreenContent(@NonNull AdError adError) {
+                                    Log.w(TAG, "Interstitial show failed: " + adError.getMessage());
+                                    interstitialAd = null;
+                                    setBannerVisible(true);
+                                    loadInterstitial();
+                                }
+                            });
+                        }
+
+                        @Override
+                        public void onAdFailedToLoad(@NonNull LoadAdError adError) {
+                            loadingInterstitial = false;
+                            interstitialAd = null;
+                            Log.w(TAG, "Interstitial failed [" + adError.getCode() + "/"
+                                    + adError.getDomain() + "]: " + adError.getMessage());
+                            adHandler.postDelayed(MainActivity.this::loadInterstitial,
+                                    adRetryDelay(interstitialAttempts));
+                        }
+                    });
+        } catch (Throwable t) {
+            loadingInterstitial = false;
+            Log.w(TAG, "Interstitial load crashed", t);
+        }
+    }
+
+    /** Called on the UI thread from AndroidBridge. */
+    private void showRewardedAd() {
+        if (!adsStarted) initAds();
+        if (!adsInitialized) {
+            pendingRewarded = true;
+            jsCallback("window.gmOnAdLoading && window.gmOnAdLoading()");
+            return;
+        }
+        RewardedAd ad = rewardedAd;
+        if (ad == null) {
+            pendingRewarded = true;
+            jsCallback("window.gmOnAdLoading && window.gmOnAdLoading()");
+            loadRewarded();
+            return;
+        }
+        rewardedAd = null;
+        ad.show(this, item -> {
+            // The page pays the reward itself in gmOnRewardedAdCompleted().
+            int amount = item == null ? 0 : item.getAmount();
+            jsCallback("(function(){var a=" + amount + ";"
+                    + "if (typeof window.gmOnRewardedAdCompleted === 'function'){window.gmOnRewardedAdCompleted(a);return;}"
+                    + "if (typeof window.giveUserReward === 'function'){window.giveUserReward(a);return;}"
+                    + "})();");
+        });
+    }
+
+    /** Called on the UI thread from AndroidBridge. */
+    private void showInterstitialAd() {
+        InterstitialAd ad = interstitialAd;
+        if (ad == null) {
+            loadInterstitial();
+            return;
+        }
+        interstitialAd = null;
+        setBannerVisible(false);
+        ad.show(this);
+    }
+
+    private void hideBanner() { setBannerVisible(false); }
+    private void showBanner() { setBannerVisible(true); }
+
+    /**
+     * Store policy: no banner during a call or on top of a full-screen ad. The
+     * page decides (gmSyncAdBanner) and calls this; the view only ever becomes
+     * VISIBLE after a banner really loaded.
+     */
+    private void setBannerVisible(boolean visible) {
+        bannerAllowed = visible;
+        if (adContainer == null) return;
+        runOnUiThread(() -> {
+            if (adContainer == null) return;
+            adContainer.setVisibility(visible && bannerLoaded ? View.VISIBLE : View.GONE);
+        });
+    }
+
+    private String adStatusJson() {
+        try {
+            return new org.json.JSONObject()
+                    .put("platform", "android")
+                    .put("appIdOk", adMobAppIdConfigured())
+                    .put("sdkInitialized", adsInitialized)
+                    .put("bannerLoaded", bannerLoaded)
+                    .put("bannerVisible", adContainer != null && adContainer.getVisibility() == View.VISIBLE)
+                    .put("bannerAttempts", bannerAttempts)
+                    .put("rewardedLoaded", rewardedAd != null)
+                    .put("rewardedAttempts", rewardedAttempts)
+                    .put("interstitialLoaded", interstitialAd != null)
+                    .put("units", new org.json.JSONObject()
+                            .put("banner", bannerUnitId())
+                            .put("rewarded", rewardedUnitId())
+                            .put("interstitial", interstitialUnitId()))
+                    .toString();
+        } catch (Throwable t) {
+            return "{\"error\":\"ad status failed\"}";
+        }
+    }
+
+    /**
+     * window.Android — the only ad surface the page can reach. Every method
+     * here is what script.js calls, so the names must not change.
+     */
+    public class AndroidBridge {
+
+        @JavascriptInterface
+        public boolean isNativeAdsAvailable() {
+            return adMobAppIdConfigured();
+        }
+
+        @JavascriptInterface
+        public String getAdUnits() {
+            try {
+                return new org.json.JSONObject()
+                        .put("banner", bannerUnitId())
+                        .put("rewarded", rewardedUnitId())
+                        .put("interstitial", interstitialUnitId())
+                        .put("testUnits", BANNER_UNIT_ID.trim().isEmpty())
+                        .toString();
+            } catch (Exception e) {
+                return "{}";
+            }
+        }
+
+        @JavascriptInterface
+        public String getAdStatus() { return adStatusJson(); }
+
+        /** The page calls this once after load; safe to call repeatedly. */
+        @JavascriptInterface
+        public void loadAds() {
+            runOnUiThread(() -> {
+                initAds();
+                // A page reload is a fresh chance: give up counters start over
+                // so a banner that exhausted its retries comes back too.
+                if (bannerAttempts >= AD_MAX_ATTEMPTS) bannerAttempts = 0;
+                if (rewardedAttempts >= AD_MAX_ATTEMPTS) rewardedAttempts = 0;
+                if (interstitialAttempts >= AD_MAX_ATTEMPTS) interstitialAttempts = 0;
+                if (adsInitialized && !bannerLoaded) loadBanner();
+                loadRewarded();
+                loadInterstitial();
+            });
+        }
+
+        @JavascriptInterface
+        public void showRewardedAd() {
+            runOnUiThread(MainActivity.this::showRewardedAd);
+        }
+
+        @JavascriptInterface
+        public void showInterstitialAd() {
+            runOnUiThread(MainActivity.this::showInterstitialAd);
+        }
+
+        @JavascriptInterface
+        public void hideBanner() {
+            runOnUiThread(MainActivity.this::hideBanner);
+        }
+
+        @JavascriptInterface
+        public void showBanner() {
+            runOnUiThread(MainActivity.this::showBanner);
+        }
+
+        @JavascriptInterface
+        public void setBannerVisible(boolean visible) {
+            runOnUiThread(() -> MainActivity.this.setBannerVisible(visible));
+        }
+
+        /** script.js asks for camera/mic this way before retrying a call. */
+        @JavascriptInterface
+        public void requestPermissions() {
+            runOnUiThread(() -> {
+                List<String> missing = new ArrayList<>();
+                if (!hasPermission(Manifest.permission.CAMERA)) missing.add(Manifest.permission.CAMERA);
+                if (!hasPermission(Manifest.permission.RECORD_AUDIO)) missing.add(Manifest.permission.RECORD_AUDIO);
+                if (!missing.isEmpty()) permissionLauncher.launch(missing.toArray(new String[0]));
+            });
+        }
+
+        @JavascriptInterface
+        public void toast(String message) {
+            if (message == null) return;
+            runOnUiThread(() -> Toast.makeText(MainActivity.this, message, Toast.LENGTH_SHORT).show());
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Permissions
     // ------------------------------------------------------------------
     private void handleWebPermissionRequest(PermissionRequest request) {
@@ -663,6 +1261,28 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        if (adView != null) adView.resume();
+        if (adsInitialized && rewardedAd == null && !loadingRewarded) loadRewarded();
+        // Coming back from Settings after allowing Nearby devices: the person
+        // already asked for discovery, so pick it straight back up instead of
+        // waiting for another tap.
+        if (!meshBound
+                && nativePrefs().getBoolean("mesh_enabled", false)
+                && missingEssentialMeshPermissions().length == 0
+                && !nativeGhostId.isEmpty()) {
+            startMeshService();
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        if (adView != null) adView.pause();
+        super.onPause();
+    }
+
+    @Override
     protected void onSaveInstanceState(@NonNull Bundle outState) {
         super.onSaveInstanceState(outState);
         if (webView != null) webView.saveState(outState);
@@ -670,6 +1290,15 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
 
     @Override
     protected void onDestroy() {
+        adHandler.removeCallbacksAndMessages(null);
+        rewardedAd = null;
+        interstitialAd = null;
+        if (adView != null) {
+            if (adContainer != null) adContainer.removeAllViews();
+            adView.destroy();
+            adView = null;
+        }
+        adContainer = null;
         pendingWebPermissionRequest = null;
         pendingFileChooserCallback = null;
         if (meshService != null) meshService.removePeerListener(this);

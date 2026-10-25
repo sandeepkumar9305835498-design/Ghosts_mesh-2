@@ -1,19 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Single-screen shell: MainActivity pads "root" with the system-bar insets and
-  the WebView fills everything that is left, so the web app is never drawn
-  underneath the status bar or the navigation bar.
+  Single-screen shell: MainActivity pads "root" with the system-bar insets, the
+  WebView takes the remaining height and the AdMob banner sits below it, so the
+  web app is never drawn underneath the status bar, the navigation bar or the ad.
+
+  The banner lives OUTSIDE the WebView on purpose: Google does not allow AdMob
+  units inside a WebView, so the native AdView is the only legal place for it.
+  ad_container stays GONE until an ad actually loads (MainActivity sets it
+  VISIBLE in onAdLoaded), so a failed request leaves no empty strip behind.
 -->
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/gm_bg">
+    android:background="@color/gm_bg"
+    android:orientation="vertical">
 
     <WebView
         android:id="@+id/webview"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
         android:background="@color/gm_bg" />
 
-</FrameLayout>
+    <FrameLayout
+        android:id="@+id/ad_container"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/gm_bg"
+        android:gravity="center_horizontal"
+        android:visibility="gone" />
+
+</LinearLayout>

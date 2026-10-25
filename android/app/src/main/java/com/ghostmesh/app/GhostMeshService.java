@@ -187,13 +187,29 @@ public class GhostMeshService extends Service
 
     /** Ghost ID (e.g. "Ghost-ABC123") and name advertised to nearby devices. */
     public void setIdentity(String ghostId, String displayName) {
-        if (ghostId != null && !ghostId.isEmpty()) this.ghostId = ghostId;
-        if (displayName != null && !displayName.isEmpty()) this.displayName = displayName;
-        if (ble != null) {
+        boolean changed = false;
+        if (ghostId != null && !ghostId.isEmpty() && !ghostId.equals(this.ghostId)) {
+            this.ghostId = ghostId;
+            changed = true;
+        }
+        if (displayName != null && !displayName.isEmpty() && !displayName.equals(this.displayName)) {
+            this.displayName = displayName;
+            changed = true;
+        }
+        if (ble != null && changed) {
+            // BleMeshDiscovery re-advertises by itself when the identity changes
+            // while advertising, so nearby phones pick the real ID up.
             ble.setGhostId(this.ghostId);
             ble.setDisplayName(this.displayName);
         }
+        if (changed) Log.i(TAG, "Identity → " + this.ghostId + " / " + this.displayName);
     }
+
+    public boolean isBleAdvertising() { return ble != null && ble.isAdvertising(); }
+
+    public boolean isBleScanning() { return ble != null && ble.isScanning(); }
+
+    public boolean isWifiDiscovering() { return wifi != null && wifi.isDiscovering(); }
 
     public void addPeerListener(PeerListener listener) {
         if (listener != null && !listeners.contains(listener)) listeners.add(listener);

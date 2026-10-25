@@ -7,4 +7,7 @@
     <string name="mesh_channel_description">Keeps looking for nearby Ghost Mesh devices over Bluetooth and Wi-Fi Direct.</string>
     <string name="mesh_notification_title">Ghost Mesh is looking for nearby devices</string>
     <string name="mesh_notification_text">Bluetooth + Wi-Fi Direct discovery is on. Tap to open the app.</string>
+    <string name="mesh_permission_title">Allow nearby devices</string>
+    <string name="mesh_permission_message">Ghost Mesh needs Nearby devices (Bluetooth + Wi-Fi) permission to find phones around you. Open Settings → Permissions and allow Nearby devices, then come back and tap Scan again.</string>
+    <string name="mesh_open_settings">Open Settings</string>
 </resources>
