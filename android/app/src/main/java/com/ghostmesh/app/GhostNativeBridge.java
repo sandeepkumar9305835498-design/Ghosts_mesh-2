@@ -79,6 +79,34 @@ public class GhostNativeBridge {
         return activity.nativePeersJson();
     }
 
+    @JavascriptInterface
+    public boolean isBluetoothEnabled() {
+        return activity.isBluetoothEnabled();
+    }
+
+    @JavascriptInterface
+    public boolean isWifiEnabled() {
+        return activity.isWifiEnabled();
+    }
+
+    /** Why is the list empty? JSON with radios, permissions and scan flags. */
+    @JavascriptInterface
+    public String getDiagnostics() {
+        return activity.nativeMeshDiagnostics();
+    }
+
+    /** Re-asks for the nearby permissions (Android may show the prompt again). */
+    @JavascriptInterface
+    public void requestPermissions() {
+        activity.postToUi(activity::requestNativeMeshStart);
+    }
+
+    /** Fixes a permanently denied permission: opens the app's Settings page. */
+    @JavascriptInterface
+    public void openAppSettings() {
+        activity.postToUi(activity::openAppSettings);
+    }
+
     /** Lets the page pull the peer table without waiting for the next push. */
     @JavascriptInterface
     public void refreshPeers() {

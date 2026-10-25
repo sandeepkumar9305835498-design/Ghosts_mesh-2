@@ -13,6 +13,7 @@ import android.net.wifi.p2p.WifiP2pInfo;
 import android.net.wifi.p2p.WifiP2pManager;
 import android.net.wifi.p2p.WpsInfo;
 import android.os.Build;
+import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 
@@ -52,6 +53,8 @@ public class WifiDirectMesh {
     private WifiP2pManager.Channel channel;
     private BroadcastReceiver receiver;
     private boolean discovering = false;
+    private final Handler retryHandler = new Handler(Looper.getMainLooper());
+    private int discoverFailures = 0;
 
     public WifiDirectMesh(Context context, Listener listener) {
         this.context = context.getApplicationContext();
@@ -83,13 +86,29 @@ public class WifiDirectMesh {
             return;
         }
         if (channel == null) {
-            channel = manager.initialize(context, Looper.getMainLooper(), null);
+            // A dead channel (Wi-Fi toggled off, channel lost) makes every later
+            // call fail with ERROR, so the framework tells us here and the next
+            // discovery re-initialises it instead of staying stuck.
+            channel = manager.initialize(context, Looper.getMainLooper(),
+                    () -> {
+                        Log.w(TAG, "Wi-Fi Direct channel disconnected — will re-init");
+                        channel = null;
+                    });
+            if (channel == null) {
+                listener.onStatus("Wi-Fi Direct is not available on this device");
+                return;
+            }
         }
         registerReceiverOnce();
+        discoverFailures = 0;
         discoverPeers();
     }
 
+    public boolean isDiscovering() { return discovering; }
+
     public void stop() {
+        retryHandler.removeCallbacksAndMessages(null);
+        discoverFailures = 0;
         if (manager != null && channel != null && discovering) {
             try {
                 manager.stopPeerDiscovery(channel, null);
@@ -137,7 +156,10 @@ public class WifiDirectMesh {
         filter.addAction(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION);
         filter.addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION);
         filter.addAction(WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION);
-        context.registerReceiver(receiver, filter);
+        // Android 14+ requires an explicit export flag for receivers that are
+        // registered at runtime; the p2p broadcasts are system broadcasts, so
+        // NOT_EXPORTED is both correct and safe here.
+        ContextCompat.registerReceiver(context, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED);
     }
 
     // -------------------------------------------------------------- discovery
@@ -148,18 +170,42 @@ public class WifiDirectMesh {
                 @Override
                 public void onSuccess() {
                     discovering = true;
+                    discoverFailures = 0;
                     listener.onStatus("Looking for Wi-Fi Direct devices");
                 }
 
                 @Override
                 public void onFailure(int reason) {
-                    listener.onStatus("Wi-Fi Direct discovery failed (" + reason + ")");
+                    // 0 ERROR (usually a dead channel), 2 BUSY (a previous
+                    // discovery is still settling). Both are transient — Wi-Fi
+                    // Direct itself simply refuses a second request too soon.
+                    if (reason == WifiP2pManager.BUSY || reason == WifiP2pManager.ERROR) {
+                        scheduleDiscoverRetry(reason);
+                        return;
+                    }
+                    // 1 P2P_UNSUPPORTED
+                    listener.onStatus("Wi-Fi Direct is not supported on this phone");
                 }
             });
         } catch (SecurityException e) {
             Log.w(TAG, "discoverPeers denied", e);
             listener.onStatus("Nearby-devices permission missing");
         }
+    }
+
+    private void scheduleDiscoverRetry(int reason) {
+        if (discoverFailures >= 4) {
+            listener.onStatus("Wi-Fi Direct stayed busy — turn Wi-Fi off and on");
+            return;
+        }
+        discoverFailures++;
+        long delay = 2000L * discoverFailures;
+        Log.i(TAG, "Wi-Fi Direct retry in " + (delay / 1000) + "s (reason " + reason + ")");
+        if (reason == WifiP2pManager.ERROR && manager != null) {
+            // The channel died: rebuild it before asking again.
+            channel = manager.initialize(context, Looper.getMainLooper(), null);
+        }
+        retryHandler.postDelayed(this::discoverPeers, delay);
     }
 
     private void requestPeers() {
@@ -205,6 +251,16 @@ public class WifiDirectMesh {
         if (!hasPermission()) {
             resultListener.onConnectResult(false, "Nearby-devices permission missing");
             return;
+        }
+        // Discovery and connect cannot run at the same time: the system answers
+        // connect with BUSY (2) while a discovery is still active.
+        try {
+            if (discovering) {
+                manager.stopPeerDiscovery(channel, null);
+                discovering = false;
+            }
+        } catch (SecurityException ignored) {
+            // permission is checked above
         }
         WifiP2pConfig config = new WifiP2pConfig();
         config.deviceAddress = address;

@@ -811,6 +811,40 @@ ok("battery saver turns off", $("call-battery-btn").classList.contains("battery-
     window.goBackToList();
 }
 
+// ------------------------------- offline messages are visible, then delivered
+{
+    window.initChatData("Ghost-OUT01");
+    window.openChat("Ghost-OUT01");
+    $("msg-input").value = "are you there";
+    window.sendMessage();
+    const bubble = [...doc.querySelectorAll("#messages-container .card")].pop();
+    const msgId = bubble ? bubble.id : "";
+    const tick = doc.getElementById("tick-" + msgId);
+    ok("a message with no link is marked undelivered instead of looking sent",
+        !!tick && tick.classList.contains("failed"), tick ? tick.className : "no tick");
+    ok("the undelivered message says why in the toast",
+        /offline/.test(toastText()), JSON.stringify(toastText()));
+
+    // A connection that opens later runs the outbox: the waiting message goes
+    // out by itself instead of sitting in the chat forever.
+    const handlers = {};
+    const sent = [];
+    const fakeConn = {
+        peer: "Ghost-OUT01", open: true,
+        send: payload => sent.push(payload),
+        on: (event, fn) => { handlers[event] = fn; },
+        close() {}
+    };
+    window.setupConn(fakeConn);
+    handlers.open();
+    ok("the waiting message is delivered when the peer connects",
+        sent.some(p => p.type === "chat" && p.text === "are you there"), JSON.stringify(sent));
+    ok("the tick turns into a normal delivery tick after the retry",
+        doc.getElementById("tick-" + msgId).className === "msg-tick",
+        doc.getElementById("tick-" + msgId).className);
+    window.goBackToList();
+}
+
 // ------------------------------------------------------- PIN hardening
 window.openAppLockSheet();
 pinPress("1357");

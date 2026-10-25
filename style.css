@@ -824,6 +824,9 @@ body {
 .msg-time { font-size: 10px; color: var(--text3); }
 .msg-tick { font-size: 10px; color: var(--text3); }
 .msg-tick.read { color: var(--accent); }
+/* A message that never reached the other phone: same slot as the tick, but
+   unmistakably not a delivery confirmation. */
+.msg-tick.failed { color: var(--danger); font-weight: 700; }
 .reaction-badge {
     position: absolute;
     bottom: -12px; right: 8px;

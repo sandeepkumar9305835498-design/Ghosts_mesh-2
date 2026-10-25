@@ -189,6 +189,9 @@ android {
 dependencies {
     implementation "androidx.appcompat:appcompat:1.7.0"
     implementation "androidx.core:core:1.13.1"
+    // AdMob. Without this dependency window.Android does not exist, script.js
+    // falls back to its own "house ad" and no real ad can ever load.
+    implementation "com.google.android.gms:play-services-ads:23.6.0"
     // WebViewAssetLoader: serves the web app from a real https:// origin, which
     // is what the camera / microphone / QR scanning needs (file:// is not a
     // secure context and blocks all of them).

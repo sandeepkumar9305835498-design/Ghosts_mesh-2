@@ -3,6 +3,8 @@
 // ===== STATE =====
 let userPhoneNumber = "", userGhostID = "", userDisplayName = "", userCurrentDP = null;
 let myPeerInstance = null;
+// Ghost IDs a Connect tap asked for before the broker finished opening.
+let gmPendingConnectIds = [];
 let activeConnections = [];
 let chatData = {};
 
@@ -61,12 +63,13 @@ function isGroupChat(id) { return !!(id && groups[id]); }
 // single sendToPeer(); for a group it's a controlled fan-out to that
 // group's member list only.
 function sendToChat(chatId, payload) {
-    if (!chatId) return;
+    if (!chatId) return false;
     if (isGroupChat(chatId)) {
-        groups[chatId].members.forEach(peerId => sendToPeer(peerId, payload));
-    } else {
-        sendToPeer(chatId, payload);
+        // Every member is tried; the result only says whether anyone got it.
+        return groups[chatId].members.reduce(
+            (any, peerId) => sendToPeer(peerId, payload) || any, false);
     }
+    return sendToPeer(chatId, payload);
 }
 
 // ===== OFFLINE (QR/WiFi) CALL SUPPORT =====
@@ -1557,6 +1560,12 @@ function initMesh() {
             showToast("Ghost Mesh Live: " + id);
             startAutoReconnectKnownPeers();
             startLobbyDiscovery();
+            // Connect taps that arrived while the broker was still opening.
+            if (gmPendingConnectIds.length) {
+                const pending = gmPendingConnectIds.slice();
+                gmPendingConnectIds = [];
+                pending.forEach(pendingId => gmOpenPeerConnection(pendingId));
+            }
         });
         myPeerInstance.on('connection', conn => {
             // FIX 8: Reject blocked peers immediately
@@ -1581,6 +1590,13 @@ function initMesh() {
                     updateHeaderDisplay();
                     initMesh();
                 }
+            } else if (err.type === 'invalid-id' || err.type === 'browser-incompatible') {
+                // These abort Peer() before a socket ever opens, so no other
+                // branch fires and the app looks connected while nothing works.
+                console.warn("Ghost Mesh cannot register with online mode:", err);
+                const label = document.getElementById("my-ghost-id-label");
+                if (label) label.innerText = userGhostID + " · offline (use WiFi tab)";
+                gmMeshBrokerShowProblem("Online chat is unavailable on this device — QR / Wi-Fi chat still works");
             } else if (err.type === 'network' || err.type === 'server-error' ||
                        err.type === 'socket-error' || err.type === 'ssl-unavailable' ||
                        !navigator.onLine) {
@@ -1660,6 +1676,8 @@ function setupConn(conn) {
         updateOnlineUsers(conn.peer, chatData[conn.peer]?.displayName || conn.peer, true);
         if (!activeConnections.some(c => c.peer === conn.peer)) activeConnections.push(conn);
         renderChatList();
+        // Anything written while this phone was offline goes out now.
+        gmFlushUndelivered(conn.peer);
     });
 
     conn.on('data', data => {
@@ -1901,6 +1919,21 @@ function setupConn(conn) {
         if (conn.__offline) {
             delete offlinePeerConnections[conn.peer];
             delete offlineWrappedChannels[conn.peer];
+        }
+    });
+
+    conn.on('error', err => {
+        // A failed or unreachable link reports here and nowhere else. Without
+        // this the UI kept showing a peer that could never receive anything.
+        const type = String((err && err.type) || "");
+        activeConnections = activeConnections.filter(c => c.peer !== conn.peer);
+        renderChatList();
+        if (type === "peer-unavailable") {
+            showToast(conn.peer + " is not online right now — both phones need the app open");
+        } else if (type === "network") {
+            showToast("Connection to " + conn.peer + " was lost — check your internet");
+        } else if (type === "not-open-yet") {
+            showToast(conn.peer + " is still connecting — try again in a moment");
         }
     });
 }
@@ -2311,10 +2344,57 @@ function connectFromUI() {
 }
 
 function connectToPeer(targetID) {
-    if (!myPeerInstance) { showToast("Not connected yet"); return; }
     if (isGhostMode) { showToast("Turn off Ghost Mode first"); return; }
-    const conn = myPeerInstance.connect(targetID);
+    // A QR or a pasted label can carry extra text ("Ghost-ABC · offline"), so
+    // keep the ID itself instead of failing on the suffix.
+    const id = String(targetID || "").split("·")[0].trim();
+    if (!id) { showToast("Enter a Ghost ID"); return; }
+    if (id === userGhostID) {
+        showToast("That is your own Ghost ID — share it and let the other phone connect");
+        return;
+    }
+    if (!myPeerInstance || myPeerInstance.destroyed) {
+        showToast("The mesh is still starting — try again in a moment");
+        return;
+    }
+    if (!myPeerInstance.open) {
+        // The broker handshake takes a few seconds on a phone. This used to
+        // answer "Not connected yet" and drop the attempt, so tapping Connect
+        // right after opening the app never did anything.
+        if (!gmPendingConnectIds.includes(id)) {
+            gmPendingConnectIds.push(id);
+            showToast("Connecting to the mesh — chat with " + id + " opens in a moment");
+        }
+        return;
+    }
+    gmOpenPeerConnection(id);
+}
+
+// One outgoing attempt: connect, explain a failure, and open the chat as soon
+// as the peer answers. PeerJS stays silent on an unreachable Ghost ID, which is
+// exactly what made the app look like chat did not work at all.
+function gmOpenPeerConnection(id) {
+    let conn;
+    try {
+        conn = myPeerInstance.connect(id);
+    } catch (e) {
+        showToast("Could not start the connection — check your internet");
+        return;
+    }
     setupConn(conn);
+    let opened = false;
+    const onOpen = () => {
+        if (opened) return;
+        opened = true;
+        closeNewConnect();
+        if (currentChatPeer !== id) openChat(id);
+    };
+    conn.on('open', onOpen);
+    if (conn.open) onOpen(); // already up — the event will not fire again
+    setTimeout(() => {
+        if (opened || activeConnections.some(c => c.peer === id && c.open)) return;
+        showToast(id + " is not online yet — keep both apps open and try again");
+    }, 12000);
 }
 
 // ===== ACCOUNT PRIVACY (who may open a chat) =====
@@ -2353,7 +2433,9 @@ function gmPickPrivacyMode(mode) {
 
 // ===== ACCEPT/REJECT =====
 function handleIncomingRequest(conn) {
-    if (notificationsEnabled === false) return;
+    // Notifications only control alerts. Turning them off used to drop the
+    // request right here, so the other phone waited forever and no chat ever
+    // opened — the request dialog has to appear either way.
     // Public mode: no ask, the chat just opens. The caller still gets the same
     // handshake message the Accept button sends, so both sides behave identically.
     if (gmPrivacyMode() === "public") {
@@ -3347,7 +3429,7 @@ function sendBundle(contentType, payload) {
     // members) — NOT to broadcastToMesh(), which used to fan every
     // message out to every open connection regardless of which chat you
     // were actually looking at.
-    sendToChat(chatId, {
+    const delivered = sendToChat(chatId, {
         type: "chat", msgId, sender: userGhostID, text,
         senderDP: userCurrentDP, senderName: userDisplayName,
         contentType, mediaPayload: payload,
@@ -3356,8 +3438,51 @@ function sendBundle(contentType, payload) {
         groupId
     });
 
+    // A message that could not be handed to a live link used to look sent: it
+    // was rendered with a normal tick and simply never arrived. Mark it, say so,
+    // and let the outbox send it the moment the peer connects.
+    if (!delivered) {
+        msg.failed = true;
+        gmMarkMessageUndelivered(msgId);
+        showToast(isGroupChat(chatId)
+            ? "Not delivered — nobody in this group is connected"
+            : chatId + " is offline — the message will send when they connect");
+    }
+
     if (isViewOnceEnabled) toggleViewOnceMode();
     renderChatList();
+}
+
+function gmMarkMessageUndelivered(msgId) {
+    const tick = document.getElementById("tick-" + msgId);
+    if (!tick) return;
+    tick.innerText = " !";
+    tick.className = "msg-tick failed";
+    tick.title = "Not delivered — the other phone was offline";
+}
+
+// The outbox for 1:1 chats: anything written while the peer was offline goes
+// out by itself once the link opens. Everything stays on the phone.
+function gmFlushUndelivered(peerId) {
+    const d = chatData[peerId];
+    if (!d || !d.messages) return;
+    let sent = 0;
+    d.messages.forEach(msg => {
+        if (msg.direction !== "outgoing" || !msg.failed) return;
+        const ok = sendToPeer(peerId, {
+            type: "chat", msgId: msg.id, sender: userGhostID, text: msg.text || "",
+            senderDP: userCurrentDP, senderName: userDisplayName,
+            contentType: msg.contentType, mediaPayload: msg.mediaPayload,
+            viewOnce: msg.viewOnce, selfDestruct: msg.selfDestruct,
+            replyTo: msg.replyTo, replyText: msg.replyText, groupId: null
+        });
+        if (!ok) return;
+        msg.failed = false;
+        sent++;
+        const tick = document.getElementById("tick-" + msg.id);
+        if (tick) { tick.innerText = " ✓"; tick.className = "msg-tick"; tick.title = ""; }
+    });
+    if (sent) showToast(sent === 1 ? "Delivered a waiting message" : "Delivered " + sent + " waiting messages");
 }
 
 // Shares the CURRENT position once, as a normal chat message. The receiver
@@ -3463,6 +3588,11 @@ function renderMessage(msg) {
     if (msg.direction === "outgoing") {
         const tick = document.createElement("span");
         tick.id = "tick-" + msg.id; tick.className = "msg-tick"; tick.innerText = " ✓";
+        if (msg.failed) {
+            tick.innerText = " !";
+            tick.className = "msg-tick failed";
+            tick.title = "Not delivered — the other phone was offline";
+        }
         tr.appendChild(tick);
     }
     body.appendChild(tr);
@@ -4228,10 +4358,10 @@ function toggleCallVideoUI(hasVideo) {
 }
 
 function sendToPeer(peerId, payload) {
-    if (!peerId) return;
+    if (!peerId) return false;
     const conn = activeConnections.find(c => c.peer === peerId);
     if (conn && conn.open !== false) {
-        try { conn.send(payload); return; } catch (e) {
+        try { conn.send(payload); return true; } catch (e) {
             console.warn("sendToPeer failed on the tracked connection:", peerId, e);
         }
     }
@@ -4243,7 +4373,7 @@ function sendToPeer(peerId, payload) {
     const offlineLink = offlineWrappedChannels[peerId]
         || Object.values(offlineWrappedChannels || {}).find(w => w && w.peer === peerId && w.open);
     if (offlineLink && offlineLink.open) {
-        try { offlineLink.send(payload); return; } catch (e) {
+        try { offlineLink.send(payload); return true; } catch (e) {
             console.warn("sendToPeer offline link failed, falling back:", peerId, e);
         }
     }
@@ -4259,7 +4389,7 @@ function sendToPeer(peerId, payload) {
         try {
             c.send(payload);
             if (!activeConnections.some(x => x.peer === peerId)) activeConnections.push(c);
-            return;
+            return true;
         } catch (e) {
             console.warn("sendToPeer fallback failed:", peerId, e);
         }
@@ -4267,8 +4397,9 @@ function sendToPeer(peerId, payload) {
     // Last resort for offline (QR/Wi-Fi) links.
     const wrapped = Object.values(offlineWrappedChannels || {}).find(w => w && w.peer === peerId && w.open);
     if (wrapped) {
-        try { wrapped.send(payload); } catch (e) { console.warn("sendToPeer offline fallback failed:", e); }
+        try { wrapped.send(payload); return true; } catch (e) { console.warn("sendToPeer offline fallback failed:", e); }
     }
+    return false;
 }
 
 // ----- Entry point: routes to online (PeerJS) or offline (raw WebRTC) calling ----
