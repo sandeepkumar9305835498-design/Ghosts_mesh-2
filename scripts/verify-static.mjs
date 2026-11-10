@@ -259,7 +259,7 @@ for (const id of ["settings-avatar", "settings-head-name", "settings-head-id"]) 
 }
 const settingsRowCount = (sheetHtml.match(/class="settings-row/g) || []).length;
 if (settingsRowCount < 9) settingsProblems.push("expected at least 9 settings rows, found " + settingsRowCount);
-for (const id of ["profile-name-display", "profile-stat-chats", "profile-stat-credits", "profile-stat-connections"]) {
+for (const id of ["profile-name-display", "profile-stat-chats", "profile-stat-connections", "profile-save-btn", "profile-cancel-btn"]) {
     if (!htmlIds.has(id)) settingsProblems.push("profile screen is missing #" + id);
 }
 check("settings sheet owns the six moved features + identity header", settingsProblems);
@@ -404,22 +404,36 @@ for (const fn of ["gmSetBluetoothScan", "gmRefreshBluetoothPeers", "gmPeersByTra
     "gmCloseSponsoredBreak", "gmThemeSponsorBreak", "gmDpCropOpen", "gmDpCropApply", "gmDpCropZoom"]) {
     if (!defined.has(fn)) extrasProblems.push(fn + "() is missing");
 }
-for (const id of ["profile-name-input", "profile-save-btn", "gm-ad-screen", "gm-ad-slot",
-    "gm-ad-claim", "dp-crop-modal", "dp-crop-viewport", "dp-crop-image", "bt-scan-toggle"]) {
+for (const id of ["profile-name-input", "profile-save-btn",
+    "dp-crop-modal", "dp-crop-viewport", "dp-crop-image", "bt-scan-toggle"]) {
     if (!htmlIds.has(id)) extrasProblems.push("missing #" + id);
+}
+// Ghost Mesh is free: no premium tier, credits, coins or ad surface may exist.
+for (const id of ["gm-ad-screen", "gm-ad-slot", "premium-plans", "credits-card",
+    "credits-pill-btn", "not-enough-credits-modal", "profile-stat-credits"]) {
+    if (htmlIds.has(id)) extrasProblems.push("#" + id + " is a paywall/ad surface and must stay removed");
+}
+if (!/const GM_FREE_FOR_ALL = true;/.test(scriptSource)) {
+    extrasProblems.push("the free-for-all flag is missing — a paywall could come back");
+}
+if (!/function isPremiumUnlocked\(\) \{\s*\/\/[\s\S]{0,200}?if \(GM_FREE_FOR_ALL\) return true;/.test(scriptSource)) {
+    extrasProblems.push("isPremiumUnlocked() no longer short-circuits to free");
 }
 // The profile edits the display name only; the phone/status editors were
 // removed on purpose, so they must not creep back in.
 for (const id of ["profile-phone-input", "profile-status"]) {
     if (htmlIds.has(id)) extrasProblems.push("#" + id + " is back on the profile screen");
 }
-if (!/const BONUS_AMOUNT = 2;/.test(scriptSource)) extrasProblems.push("the daily bonus is not 2 credits");
-if (/BONUS_AMOUNT = 5;/.test(scriptSource)) extrasProblems.push("the daily bonus is back to 5 credits");
 if (/watchAdForCredits|quickAddCredit/.test(scriptSource)) {
     extrasProblems.push("a fake ad/credit shortcut is back");
 }
-// The rewarded entry is inside the header 3-dot menu, not on a main screen.
-if (!/Earn Credits[^<]*Sponsor/.test(menuHtml)) extrasProblems.push("the Earn Credits item is missing from the 3-dot menu");
+// Nothing in the menus may sell anything.
+if (/Earn Credits|Watch a Sponsor|Premium/i.test(menuHtml)) {
+    extrasProblems.push("the 3-dot menu still advertises credits/premium");
+}
+// Native NSD discovery has to be wired on both sides of the bridge.
+if (!/startNsdDiscovery/.test(scriptSource)) extrasProblems.push("the page never starts Android NSD");
+if (!/onPeerDiscovered/.test(scriptSource)) extrasProblems.push("the native NSD callback is missing in script.js");
 // Bluetooth and Wi-Fi Direct must not share a peer list.
 if (!/gmPeersByTransport\("ble"\)/.test(scriptSource) || !/gmPeersByTransport\("wifi-direct"\)/.test(scriptSource)) {
     extrasProblems.push("the WiFi / Bluetooth panels do not filter by transport");

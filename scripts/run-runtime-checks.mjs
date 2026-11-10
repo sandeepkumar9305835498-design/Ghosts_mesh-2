@@ -79,9 +79,8 @@ ok("the fake ad overlay is gone from the DOM", $("watch-ad-overlay") === null);
 
 // ------------------------------------------------------- sign in
 window.executeLogin("", "Test Ghost");
-const creditsAfterLogin = window.getCredits();
-ok("sign-in grants the starter credits", creditsAfterLogin === 10, "credits=" + creditsAfterLogin);
-ok("bonus is ready right after sign-in", window.msUntilBonus() === 0, "wait=" + window.msUntilBonus());
+ok("the app is free: no credit balance exists", window.getCredits() === 0, "credits=" + window.getCredits());
+ok("every feature is unlocked without a plan", window.isPremiumUnlocked() === true);
 
 // ------------------------------------------------------- in-app confirm
 ok("confirm sheet starts hidden", hidden("gm-confirm") === true);
@@ -107,21 +106,13 @@ ok("sheet closes after cancelling", hidden("gm-confirm") === true);
 window.gmConfirmResolve(true);
 ok("a stale answer cannot fire an old callback", cancelRan === false);
 
-// ------------------------------------------------------- daily bonus
+// ------------------------------------------------------- no credits at all
 window.claimDailyBonus();
-const afterBonus = window.getCredits();
-ok("daily bonus adds 2 credits", afterBonus === creditsAfterLogin + 2, "credits=" + afterBonus);
-ok("daily bonus starts the 24h cooldown", window.msUntilBonus() > 23 * 60 * 60 * 1000, "wait=" + window.msUntilBonus());
+ok("the old daily-credit bonus pays nothing", window.getCredits() === 0, "credits=" + window.getCredits());
+ok("claiming says the app is free instead of paying out", /free/i.test(toastText()), JSON.stringify(toastText()));
 ok("bonus toast has no emoji", !/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(toastText()), JSON.stringify(toastText()));
-
-window.claimDailyBonus();          // second press inside the cooldown
-ok("a second claim inside the cooldown pays nothing", window.getCredits() === afterBonus, "credits=" + window.getCredits());
-ok("the cooldown is explained in the toast", /already claimed/.test(toastText()), JSON.stringify(toastText()));
-
-// the button doubles as the countdown
 window.renderCreditsUI();
-ok("bonus button shows the countdown", /^Bonus ready in /.test($("bonus-earn-label").innerText), $("bonus-earn-label").innerText);
-ok("bonus button is disabled during the cooldown", $("bonus-earn-btn").disabled === true);
+ok("the credits widget is not on screen", !$("credits-card") && !$("credits-pill-btn"));
 
 // countdown formatting
 ok("formatBonusWait formats minutes", window.formatBonusWait(5 * 60 * 1000) === "5 min", window.formatBonusWait(5 * 60 * 1000));
@@ -131,10 +122,10 @@ ok("formatBonusWait formats hours+minutes", window.formatBonusWait(90 * 60 * 100
 window.openSettingsSheet();
 ok("settings sheet opens", hidden("settings-sheet") === false);
 const settingsRows = doc.querySelectorAll("#settings-sheet .settings-row");
-ok("settings lists all twelve options", settingsRows.length === 12, String(settingsRows.length));
+ok("settings lists all ten options", settingsRows.length === 10, String(settingsRows.length));
 const settingsText = $("settings-sheet").textContent;
 for (const label of ["My Profile", "Ghost Assistant (Recover ID)", "Chat Themes", "App Lock", "Clear All Chats",
-    "Blocked Ghosts", "Account Privacy", "Privacy Policy", "Send Feedback", "Claim Daily Bonus", "Refer a Ghost", "Logout"]) {
+    "Blocked Ghosts", "Account Privacy", "Privacy Policy", "Send Feedback", "Logout"]) {
     ok(`settings has "${label}"`, settingsText.includes(label));
 }
 ok("no settings row says coming soon", !/coming soon/i.test(settingsText), settingsText);
@@ -151,7 +142,7 @@ ok("the My Profile row opens the profile screen",
     hidden("profile-screen") === false && hidden("settings-sheet") === true);
 ok("the profile screen shows the Ghost ID and its stats",
     $("profile-ghost-id").innerText === $("my-ghost-id-label").innerText &&
-    !!$("profile-stat-chats") && !!$("profile-stat-credits") && !!$("profile-stat-connections"));
+    !!$("profile-stat-chats") && !!$("profile-stat-connections") && !$("profile-stat-credits"));
 window.closeProfile();
 ok("leaving the profile returns to Settings",
     hidden("settings-sheet") === false && hidden("profile-screen") === true);
@@ -495,7 +486,8 @@ ok("the Save button hides again after saving", hidden("profile-save-btn") === tr
 ok("the header picked up the new name", $("my-name-display").innerText === "Sumit", $("my-name-display").innerText);
 ok("the profile hero shows the name", $("profile-name-display").innerText === "Sumit", $("profile-name-display").innerText);
 ok("the Ghost ID has a device-only note", /only on this device/i.test($("profile-screen").textContent));
-ok("the profile has a premium call to action", !!doc.querySelector("#profile-screen .profile-premium-btn"));
+ok("the profile screen sells nothing", !doc.querySelector("#profile-screen .profile-premium-btn") &&
+    !doc.querySelector("#profile-screen .premium-badge-btn"));
 window.closeProfile();
 
 // ------------------------------------------------------- chats: online strip
@@ -524,8 +516,9 @@ ok("the privacy policy opens", hidden("privacy-modal") === false);
 ok("the policy says no account server and no account data",
     /no account server/i.test($("privacy-modal").textContent)
         && /No account data/i.test($("privacy-modal").textContent));
-ok("the policy discloses the AdMob ads",
-    /Google AdMob/i.test($("privacy-modal").textContent));
+ok("the policy states there are no ads and no paid tier",
+    /no ads/i.test($("privacy-modal").textContent) &&
+    !/AdMob/i.test($("privacy-modal").textContent));
 window.closePrivacyPolicy();
 ok("the privacy policy closes", hidden("privacy-modal") === true);
 
@@ -967,7 +960,7 @@ ok("the right PIN unlocks the idle-locked app",
     ok("the map stats and actions stay visible (nothing auto-hides)",
         !doc.querySelector(".live-map-panel").classList.contains("hidden") &&
         doc.querySelectorAll(".live-map-stats .live-map-row").length === 2 &&
-        doc.querySelectorAll(".live-map-actions .credits-earn-btn").length === 2);
+        doc.querySelectorAll(".live-map-actions .map-action-btn").length === 2);
     window.closeLiveMap();
     ok("closing the map returns to the chats",
         hidden("chatlist-screen") === false && hidden("map-screen") === true);
@@ -991,6 +984,14 @@ ok("the right PIN unlocks the idle-locked app",
     ok("the name Save button hides again", hidden("profile-save-btn") === true);
     ok("the new name is shown on the profile",
         $("profile-name-display").innerText === "Test Ghost", $("profile-name-display").innerText);
+    // Reload path: the name comes from storage, not from a variable that dies
+    // with the page. executeLogin() is what a fresh launch runs.
+    ok("the saved name is persisted for a reload",
+        window.gmStoredDisplayName() === "Test Ghost", window.gmStoredDisplayName());
+    window.executeLogin("", "");
+    ok("a fresh launch shows the saved name, not the login default",
+        $("my-name-display").innerText === "Test Ghost", $("my-name-display").innerText);
+    window.openProfile();
     $("profile-name-input").value = "   ";
     window.saveDisplayName();
     ok("an empty name is rejected", toastText() === "Enter a name", toastText());
@@ -998,54 +999,20 @@ ok("the right PIN unlocks the idle-locked app",
     window.closeProfile();
 }
 
-// ------------------------------------------- sponsor break (+2 credits)
+// ------------------------------ free build: no ads, no paywall anywhere
 {
-    // A duration long enough that "claiming early" is still early when the test
-    // reaches it, but short enough that the suite does not sit through 15s.
-    window.GM_AD_DURATION_MS = 400;
-    const before = window.getCredits();
+    ok("there is no ad screen in the DOM",
+        !$("gm-ad-screen") && !$("gm-ad-slot") && !$("not-enough-credits-modal"));
+    ok("there is no premium call to action anywhere",
+        !doc.querySelector(".profile-premium-btn") && !doc.querySelector(".premium-badge-btn") &&
+        !doc.querySelector("#credits-pill-btn"));
     window.gmOpenSponsoredBreak("earn");
-    ok("the Earn Credits menu entry opens the sponsor break", hidden("gm-ad-screen") === false);
-    ok("the advertiser slot is filled", $("gm-ad-slot").innerHTML.trim() !== "");
-    ok("the rewarded break names the 2-credit reward",
-        /\+2 credits/.test($("gm-ad-title").innerText), $("gm-ad-title").innerText);
-    ok("the claim waits for the view to finish", hidden("gm-ad-claim") === true);
-    window.gmClaimSponsoredCredits();
-    ok("claiming early pays nothing",
-        window.getCredits() === before && /full sponsor break/.test(toastText()), toastText());
-    await new Promise(r => setTimeout(r, 900));
-    ok("the claim appears once the view finishes", hidden("gm-ad-claim") === false);
-    window.gmClaimSponsoredCredits();
-    ok("watching a sponsor adds 2 credits", window.getCredits() === before + 2, "credits=" + window.getCredits());
-    ok("the break closes after claiming", hidden("gm-ad-screen") === true);
-    ok("one sponsor view is counted for today", window.gmAdViewsLeft() === 9, String(window.gmAdViewsLeft()));
-
-    // The daily cap keeps the credit economy finite. jsdom refuses
-    // window.localStorage on a file:// origin, so the count comes in through the
-    // app's own reader instead of a raw storage key.
-    const realViewsToday = window.gmAdViewsToday;
-    window.gmAdViewsToday = () => 10;
-    window.gmOpenSponsoredBreak("earn");
-    ok("the daily sponsor limit is enforced",
-        hidden("gm-ad-screen") === true && /Daily sponsor limit/.test(toastText()), toastText());
-    window.gmAdViewsToday = realViewsToday;
-    ok("the limit leaves the credit balance untouched", window.getCredits() === before + 2);
-}
-
-// ----------------------------------- theme change is the only automatic ad
-{
-    window.GM_AD_DURATION_MS = 300;
+    ok("asking for a sponsor break explains the app is free", /free/i.test(toastText()), toastText());
     window.applyTheme("forest", true);
-    ok("changing the theme shows the sponsor break", hidden("gm-ad-screen") === false);
-    ok("the theme break offers no credits", hidden("gm-ad-claim") === true);
-    await new Promise(r => setTimeout(r, 800));
-    ok("the theme break finishes with Continue", hidden("gm-ad-continue") === false);
-    window.gmCloseSponsoredBreak();
-    ok("the theme break closes", hidden("gm-ad-screen") === true);
-    window.applyTheme("forest");
-    ok("restoring the theme (boot / fallback) shows no break", hidden("gm-ad-screen") === true);
-    delete window.GM_AD_DURATION_MS;
+    ok("changing the theme never shows an ad", $("gm-ad-screen") === null);
     window.applyTheme("default");
+    ok("every feature stays unlocked with no plan", window.isPremiumUnlocked() === true);
+    ok("credits can never be added", (window.addCredits(50), window.getCredits() === 0));
 }
 
 // ------------------------------------------- profile photo adjuster

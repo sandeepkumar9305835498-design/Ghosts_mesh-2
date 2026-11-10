@@ -544,7 +544,24 @@ body {
 .live-map-dot.you { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .live-map-dot.peer { background: var(--success); }
 .live-map-actions { display: flex; gap: 8px; }
-.live-map-actions .credits-earn-btn { flex: 1; justify-content: center; padding: 9px 10px; }
+.live-map-actions .map-action-btn { flex: 1; justify-content: center; padding: 9px 10px; }
+
+/* Map action buttons. They used to borrow the credits button class, which is
+   gone with the credits system. */
+.map-action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 9px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.map-action-btn:active { transform: scale(0.97); }
 .live-map-note {
     margin: 2px 0 0;
     font-size: 10.5px;
@@ -2298,6 +2315,46 @@ select:focus:not(:focus-visible) {
     border-radius: 50%;
     background: #fff;
 }
+/* Nearby peers found over Android NSD: a pulsing blip, so a live radar looks
+   alive instead of frozen. The halo expands and fades on a loop. */
+.gm-radar-blip-wrap { background: none; border: none; }
+.gm-radar-blip {
+    position: relative;
+    display: block;
+    width: 14px;
+    height: 14px;
+    margin: 6px;
+    border-radius: 50%;
+    background: #22d3ee;
+    border: 2px solid rgba(255, 255, 255, 0.9);
+    box-sizing: border-box;
+    box-shadow: 0 0 10px rgba(34, 211, 238, 0.85);
+}
+.gm-radar-blip::after {
+    content: "";
+    position: absolute;
+    inset: -3px;
+    border-radius: 50%;
+    border: 2px solid rgba(34, 211, 238, 0.75);
+    animation: gm-radar-pulse 1.8s ease-out infinite;
+}
+@keyframes gm-radar-pulse {
+    0%   { transform: scale(0.7); opacity: 0.9; }
+    70%  { transform: scale(2.1); opacity: 0; }
+    100% { transform: scale(2.1); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .gm-radar-blip::after { animation: none; }
+}
+
+/* Set by gmApplyKeyboardInset(). The WebView itself is resized natively; while
+   the keyboard is open the emoji tray is pointless, so keep it closed. */
+body.gm-keyboard-open #emoji-picker { display: none !important; }
+
+/* MainActivity resizes the WebView itself (IME inset), so no extra offset is
+   applied here — adding `bottom: keyboard-height` would shift the composer
+   twice. The --gm-keyboard-height variable is only read by JS. */
+
 .leaflet-popup-content .map-connect-btn {
     margin-top: 6px;
     background: var(--accent);
@@ -2862,9 +2919,26 @@ select:focus:not(:focus-visible) {
     width: 100%;
     margin-bottom: 0;
 }
-#profile-screen .profile-field .save-btn {
-    margin-top: 12px;
-    display: block;
+/* Save / Cancel are a normal row UNDER the field. A button floating over the
+   input was hidden by the Android soft keyboard, which looked like "Save does
+   nothing". */
+.profile-name-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 10px;
+}
+#profile-screen .profile-field .profile-name-actions .save-btn,
+#profile-screen .profile-field .profile-name-actions .cancel-btn {
+    position: static;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: auto;
+    margin: 0;
+    padding: 9px 18px;
+    border-radius: 10px;
+    font-size: 14px;
 }
 
 /* ---- Recovery phrase: hidden until deliberately revealed ----------- */

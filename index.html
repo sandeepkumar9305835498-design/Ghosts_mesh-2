@@ -22,22 +22,6 @@
 
     <meta name="gm-razorpay-key" content="rzp_test_TpjbsTfAoTQsBY">
     <!-- ==========================================================
-         GOOGLE ADMOB IDS (used by the Android app)
-         app id      : ca-app-pub-XXXX~YYYY   (tilde)  → also in
-                       android/app/src/main/AndroidManifest.xml
-         banner unit : ca-app-pub-XXXX/YYYY   (slash)
-         interstitial: ca-app-pub-XXXX/YYYY
-         rewarded    : ca-app-pub-XXXX/YYYY
-         These are AdMob unit ids, NOT AdSense slots. AdSense would need a
-         ca-pub-… publisher id plus a numeric data-ad-slot, and it is not
-         allowed inside a WebView — which is why the APK serves real ads
-         natively through window.Android instead.
-         ========================================================== -->
-    <meta name="gm-ad-slot" content="ca-app-pub-3940256099942544/6300978111">
-    <meta name="gm-ad-interstitial-unit" content="ca-app-pub-3940256099942544/1033173712">
-    <meta name="gm-ad-rewarded-unit" content="ca-app-pub-3940256099942544/5224354917">
-    <meta name="gm-admob-app-id" content="ca-app-pub-8808521207954078~9122584573">
-    <!-- ==========================================================
          ONLINE MODE — optional PeerJS signalling server
          Leave these commented to use PeerJS's public cloud broker (works
          for connecting by Ghost ID, and its /peers list is disabled).
@@ -50,7 +34,7 @@
     <meta name="gm-peer-key" content="ghostmesh">
     <meta name="gm-peer-discovery" content="on">
          ========================================================== -->
-    <!-- Note: gm-admob-app-id and admob-config.js use the same AdMob app ID. -->
+    <!-- No ad tags: Ghost Mesh is free and never initialises an ad SDK. -->
     <script src="peerjs.min.js"></script>
     <link rel="stylesheet" href="leaflet.css"/>
     <!-- leaflet.js, three.min.js, qrcode.min.js and jsQR.js are NOT loaded here:
@@ -132,11 +116,6 @@
                 </div>
             </div>
             <div class="header-right">
-                <button id="credits-pill-btn" class="credits-pill-btn" onclick="openPremiumModal()">
-                    <span class="credits-pill-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg></span>
-                    <span class="credits-pill-word">Ghost</span>
-                    <span id="credits-pill-amount">0</span>
-                </button>
                 <div class="three-dot-wrap">
                     <button class="icon-btn" onclick="toggleMainMenu()" aria-label="Main menu" aria-haspopup="menu">
                         <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
@@ -157,12 +136,6 @@
                         <div class="menu-item" role="button" tabindex="0" onclick="toggleRadarMap()">
                             <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
                             Radar Map
-                        </div>
-                        <!-- Earn credits lives here (tucked in the 3-dot menu, not
-                             on any main screen): a short sponsor break pays +2. -->
-                        <div class="menu-item" role="button" tabindex="0" onclick="gmOpenSponsoredBreak('earn')">
-                            <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h10v2H4v-2zm13 .5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7zm1.8 3.5h-1.2v1.2h-1.2V20h-1.2v-1.2h-1.2v-1.2h1.2v-1.2h1.2v1.2h1.2v1.2z"/></svg>
-                            Earn Credits — Watch a Sponsor (+2)
                         </div>
                         <div class="menu-item" role="button" tabindex="0" onclick="toggleGhostMode()">
                             <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78l3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z"/></svg>
@@ -453,10 +426,6 @@
                         <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
                     </button>
                     <div id="chat-menu" class="dropdown-menu hidden">
-                        <div class="menu-item" role="button" tabindex="0" onclick="openSendCreditModal()">
-                            <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>
-                            Send Credit
-                        </div>
                         <div class="menu-item" role="button" tabindex="0" onclick="toggleChatNotif()">
                             <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
                             <span id="chat-notif-label">Mute Notifications</span>
@@ -624,8 +593,8 @@
                 </div>
             </div>
             <div class="live-map-actions">
-                <button class="credits-earn-btn" onclick="gmMapLocateMe()">Use my location</button>
-                <button class="credits-earn-btn" onclick="openOnlineUsers()">Nearby Ghosts</button>
+                <button class="map-action-btn" onclick="gmMapLocateMe()">Use my location</button>
+                <button class="map-action-btn" onclick="openOnlineUsers()">Nearby Ghosts</button>
             </div>
             <p class="live-map-note hidden" id="map-info-note">Location is off until you allow it. Pins appear only for people who chose to share their position with you — there is no server tracking anyone.</p>
         </div>
@@ -664,17 +633,12 @@
             <p class="profile-id-note">This ID lives only on this device</p>
             <div class="profile-stats">
                 <div class="profile-stat"><b id="profile-stat-chats">0</b><span>Chats</span></div>
-                <div class="profile-stat"><b id="profile-stat-credits">0</b><span>Credits</span></div>
                 <div class="profile-stat"><b id="profile-stat-connections">0</b><span>Connected</span></div>
             </div>
             <div class="profile-action-row">
-                <button class="profile-action-btn" onclick="focusProfileName()">Edit Name</button>
+                <button class="profile-action-btn" onclick="gmProfileBeginEdit()">Change</button>
                 <button class="profile-action-btn" onclick="gmBlurPhraseBackup();gmOpenPhraseBackup()">Recovery Phrase</button>
             </div>
-            <button class="profile-premium-btn" onclick="openPremiumModal()">
-                <span class="profile-premium-star" aria-hidden="true">★</span>
-                <span id="profile-premium-label">Premium</span>
-            </button>
             <div class="profile-info-box">
                 <!-- Only the display name is editable here. Phone, status and
                      the read-only network row were removed: nothing else on
@@ -682,34 +646,16 @@
                      made the profile look like a second settings page. -->
                 <div class="profile-field">
                     <label for="profile-name-input">Display Name</label>
-                    <input type="text" id="profile-name-input" class="profile-input" placeholder="Your name" oninput="gmProfileNameDirty()">
-                    <button class="save-btn hidden" id="profile-save-btn" onclick="saveDisplayName()">Save</button>
-                </div>
-            </div>
-            <!-- CREDITS & PREMIUM — deliberately compact: one slim widget row
-                 (icon + balance + earn icons), not a dominant card -->
-            <div class="credits-card">
-                <div class="credits-mini-row">
-                    <span class="credits-mini-icon">
-                        <svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>
-                    </span>
-                    <span class="credits-amount" id="credits-amount">0</span>
-                    <span class="credits-mini-label">credits</span>
-                    <button class="premium-badge-btn" onclick="openPremiumModal()">
-                        <svg viewBox="0 0 24 24" fill="currentColor" width="11" height="11"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
-                        Premium
-                    </button>
-                    <div class="credits-mini-actions">
-                        <button class="credits-earn-btn credits-earn-icon" title="Daily bonus — earn +2" aria-label="Claim the daily bonus for 2 credits" onclick="claimDailyBonus()">
-                            <svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><path d="M8 5v14l11-7z"/></svg>
-                        </button>
-                        <button class="credits-earn-btn credits-earn-icon" title="Share the app — earn +5" aria-label="Share the app for 5 credits" onclick="shareAppForCredits()">
-                            <svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L7.04 9.81C6.5 9.31 5.79 9 5 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/></svg>
-                        </button>
+                    <input type="text" id="profile-name-input" class="profile-input" placeholder="Your name"
+                           maxlength="32" autocomplete="name" enterkeyhint="done"
+                           oninput="gmProfileNameDirty()" onkeydown="if(event.key==='Enter'){event.preventDefault();saveDisplayName();}">
+                    <div class="profile-name-actions">
+                        <button class="cancel-btn hidden" id="profile-cancel-btn" onclick="gmProfileCancelEdit()">Cancel</button>
+                        <button class="save-btn hidden" id="profile-save-btn" onclick="saveDisplayName()">Save</button>
                     </div>
                 </div>
-                <p id="credits-eligibility-msg" class="sub hidden" style="text-align:center;margin-top:6px;color:var(--danger);font-size:11px;"></p>
             </div>
+            <!-- Ghost Mesh is free: no credits, coins, premium tiers or ads. -->
 
             <p class="profile-foot-note">Your Ghost ID lives only on this device. Log out from Settings any time — it stays saved.</p>
         </div>
@@ -770,14 +716,6 @@
                 <button class="settings-row" onclick="closeSettingsSheet();openFeedbackModal()">
                     <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z"/></svg>
                     <span class="settings-row-text"><span class="settings-row-title">Send Feedback</span><span class="settings-row-sub">Report a problem or suggest a feature</span></span>
-                </button>
-                <button class="settings-row" onclick="closeSettingsSheet();claimDailyBonus()">
-                    <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 2l2.9 6.6 7.1.6-5.4 4.7 1.6 7-6.2-3.7L5.8 21l1.6-7L2 9.2l7.1-.6L12 2z"/></svg>
-                    <span class="settings-row-text"><span class="settings-row-title">Claim Daily Bonus</span><span class="settings-row-sub">Earn 2 credits every 24 hours · <span id="settings-bonus-state" class="settings-row-state"></span></span></span>
-                </button>
-                <button class="settings-row" onclick="closeSettingsSheet();shareAppForCredits()">
-                    <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L7.04 9.81C6.5 9.31 5.79 9 5 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/></svg>
-                    <span class="settings-row-text"><span class="settings-row-title">Refer a Ghost</span><span class="settings-row-sub">Invite someone and earn 5 credits</span></span>
                 </button>
                 <button class="settings-row settings-danger" onclick="closeSettingsSheet();logoutApp()">
                     <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>
@@ -867,7 +805,7 @@
                 <h5>Direct connections</h5>
                 <p>Messages and calls travel directly between two devices using WebRTC. When pairing over the internet, the public PeerJS broker is used only to exchange connection metadata; message content goes device to device.</p>
                 <h5>Advertising</h5>
-                <p>Free users see ads from Google AdMob. Google may use a device advertising ID to serve and measure them; Ghost Mesh does not receive or store that data. Premium users see no ads. You can reset the advertising ID in Android Settings → Google → Ads.</p>
+                <p>There are no ads. Ghost Mesh does not initialise an ad SDK, does not use an advertising ID, and has no paid tier or credits of any kind.</p>
                 <h5>Location</h5>
                 <p>Location is off by default and is asked for only when you open the radar map. It is never stored on a server.</p>
                 <h5>Permissions</h5>
@@ -925,28 +863,6 @@
         </div>
     </div>
 
-    <!-- SPONSOR BREAK — the app's only ad surface. It opens when the person taps
-         "Earn Credits" in the header 3-dot menu (rewarded: +2 credits) and when
-         a theme is changed. Nothing else in the app shows an ad, and a real ad
-         network is used as soon as one is configured (see gmAdNetwork()). -->
-    <div id="gm-ad-screen" class="gm-ad-screen hidden" role="dialog" aria-label="Sponsored break">
-        <div class="gm-ad-card">
-            <div class="gm-ad-head">
-                <span class="gm-ad-tag" id="gm-ad-tag">Sponsored</span>
-                <button class="gm-ad-close" id="gm-ad-close" onclick="gmCloseSponsoredBreak()" aria-label="Close the sponsored break">
-                    <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-                </button>
-            </div>
-            <h4 id="gm-ad-title">A short word from our sponsor</h4>
-            <div id="gm-ad-slot" class="gm-ad-slot"></div>
-            <div class="gm-ad-progress"><div id="gm-ad-progress-fill" class="gm-ad-progress-fill"></div></div>
-            <p class="gm-ad-timer" id="gm-ad-timer"></p>
-            <button class="primary-btn hidden" id="gm-ad-claim" onclick="gmClaimSponsoredCredits()">Claim +2 credits</button>
-            <button class="cancel-btn hidden" id="gm-ad-continue" onclick="gmCloseSponsoredBreak()">Continue</button>
-            <p class="gm-ad-note" id="gm-ad-note"></p>
-        </div>
-    </div>
-
     <!-- PASTE PAIRING CODE — replaces window.prompt() for the same reason -->
     <div id="gm-paste-modal" class="modal-overlay hidden" role="dialog" aria-label="Paste pairing code" onclick="if(event.target===this)gmClosePasteModal()">
         <div class="modal-box">
@@ -961,52 +877,7 @@
     </div>
 
 
-    <!-- NOT ENOUGH CREDITS PROMPT — shown right when any credit-costing
-         action fails, with a one-tap way to earn more immediately -->
-    <div id="not-enough-credits-modal" class="modal-overlay hidden" role="dialog" aria-label="Not enough credits" onclick="if(event.target===this)closeNotEnoughCreditsModal()">
-        <div class="modal-box not-enough-credits-box">
-            <div class="modal-icon-badge"><svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg></div>
-            <h4 style="text-align:center;margin:6px 0 2px;">Not Enough Credits</h4>
-            <p class="sub" style="text-align:center;" id="not-enough-credits-msg">You need more credits for this.</p>
-            <button class="primary-btn" onclick="claimDailyBonus();closeNotEnoughCreditsModal()">
-                <svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><path d="M12 2l2.9 6.6 7.1.6-5.4 4.7 1.6 7-6.2-3.7L5.8 21l1.6-7L2 9.2l7.1-.6L12 2z"/></svg>
-                Daily Bonus — Earn +2 Credits
-            </button>
-            <button class="credits-earn-btn" style="width:100%;margin-top:8px;" onclick="shareAppForCredits();closeNotEnoughCreditsModal()">
-                Share App — Earn +5 Credits
-            </button>
-            <button class="cancel-btn" style="width:100%;margin-top:8px;" onclick="closeNotEnoughCreditsModal()">Not Now</button>
-        </div>
-    </div>
-
-    <!-- SEND CREDIT MODAL (chat 3-dot → Send Credit) -->
-    <div id="send-credit-modal" class="modal-overlay hidden" role="dialog" aria-label="Send credit" onclick="if(event.target===this)closeSendCreditModal()">
-        <div class="modal-box send-credit-box">
-            <div class="send-credit-header">
-                <span class="modal-icon-badge small"><svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg></span>
-                <div>
-                    <h4 style="margin:0;">Send Credit</h4>
-                    <p class="sub" style="margin:0;">Send Ghost Credits to <span id="send-credit-peer-name">this chat</span></p>
-                </div>
-            </div>
-            <div class="send-credit-amounts">
-                <button class="send-credit-amount-btn amt-green" data-amt="2" onclick="pickCreditAmount(2)">
-                    <span class="amt-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg></span><span class="amt-num">2</span><span class="amt-label">Credits</span>
-                </button>
-                <button class="send-credit-amount-btn amt-purple active" data-amt="5" onclick="pickCreditAmount(5)">
-                    <span class="amt-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg></span><span class="amt-num">5</span><span class="amt-label">Credits</span>
-                </button>
-                <button class="send-credit-amount-btn amt-dark" data-amt="10" onclick="pickCreditAmount(10)">
-                    <span class="amt-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg></span><span class="amt-num">10</span><span class="amt-label">Credits</span>
-                </button>
-            </div>
-            <button class="primary-btn send-credit-confirm" id="send-credit-confirm-btn" onclick="confirmSendCredit()">
-                <span>Send 5 Credits</span>
-                <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/></svg>
-            </button>
-            <button class="cancel-btn" style="width:100%;margin-top:8px;" onclick="closeSendCreditModal()">Cancel</button>
-        </div>
-    </div>
+    <!-- No credit gifting: Ghost Mesh is free and has no currency. -->
 
     <!-- PREMIUM MODAL — redesigned: dark-surface card with accent-purple hero,
          inline-SVG feature icons (no emoji) and tighter vertical rhythm -->
@@ -1014,49 +885,24 @@
         <div class="modal-box premium-modal-box">
             <div class="premium-hero">
                 <span class="premium-hero-badge"><svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg></span>
-                <h3>Ghost Mesh Premium</h3>
-                <p class="premium-hero-sub">Every perk unlocked — no per-call credits, no limits.</p>
-            </div>
-
-            <div class="premium-credits-row">
-                <span class="credits-mini-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg></span>
-                <span id="premium-modal-credits">0</span>
-                <span class="sub" style="margin:0;">Ghost Credits</span>
+                <h3>Ghost Mesh is free</h3>
+                <p class="premium-hero-sub">Every feature is unlocked for everyone — no plans, no credits, no ads.</p>
             </div>
 
             <ul class="premium-feature-list">
                 <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg></span><span class="pf-text"><span class="pf-title">Voice Changer</span><span class="pf-sub">calls &amp; voice notes</span></span></li>
                 <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg></span><span class="pf-text"><span class="pf-title">Custom Chat Wallpapers</span><span class="pf-sub">free of the default look</span></span></li>
-                <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg></span><span class="pf-text"><span class="pf-title">Unlimited Pinned Messages</span><span class="pf-sub">free accounts get 1</span></span></li>
+                <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg></span><span class="pf-text"><span class="pf-title">Unlimited Pinned Messages</span><span class="pf-sub">for everyone</span></span></li>
                 <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9c-.83 0-1.5-.67-1.5-1.5S5.67 9 6.5 9 8 9.67 8 10.5 7.33 12 6.5 12zm3-4C8.67 8 8 7.33 8 6.5S8.67 5 9.5 5s1.5.67 1.5 1.5S10.33 8 9.5 8zm5 0c-.83 0-1.5-.67-1.5-1.5S13.67 5 14.5 5s1.5.67 1.5 1.5S15.33 8 14.5 8zm3 4c-.83 0-1.5-.67-1.5-1.5S16.67 9 17.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg></span><span class="pf-text"><span class="pf-title">Exclusive Bubble Themes</span><span class="pf-sub">plus every accent colour</span></span></li>
                 <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm.5-13H11v6l5.2 3.1.8-1.3-4.5-2.7V7z"/></svg></span><span class="pf-text"><span class="pf-title">Extended Self-Destruct Timers</span><span class="pf-sub">up to 1 hour and beyond</span></span></li>
                 <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M18 8h-1V6a5 5 0 0 0-10 0v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zM9 6a3 3 0 0 1 6 0v2H9V6zm3 12a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/></svg></span><span class="pf-text"><span class="pf-title">Hidden Chat Folder</span><span class="pf-sub">PIN-protected, off the list</span></span></li>
-                <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg></span><span class="pf-text"><span class="pf-title">HD Video Calls</span><span class="pf-sub">no per-call credit cost</span></span></li>
+                <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg></span><span class="pf-text"><span class="pf-title">HD Video Calls</span><span class="pf-sub">free, always</span></span></li>
             </ul>
 
-            <div class="premium-plans">
-                <button class="premium-plan-btn" data-plan="monthly" onclick="buyPremiumPlan('monthly')">
-                    <span class="plan-name">1 Month</span>
-                    <span class="plan-price">₹99</span>
-                    <span class="plan-permonth">₹99 / month</span>
-                </button>
-                <button class="premium-plan-btn plan-best" data-plan="6month" onclick="buyPremiumPlan('6month')">
-                    <span class="plan-badge">Save ₹195</span>
-                    <span class="plan-name">6 Months</span>
-                    <span class="plan-price">₹399</span>
-                    <span class="plan-permonth">₹66 / month</span>
-                </button>
-                <button class="premium-plan-btn" data-plan="yearly" onclick="buyPremiumPlan('yearly')">
-                    <span class="plan-badge founder-badge">Founder</span>
-                    <span class="plan-name">1 Year</span>
-                    <span class="plan-price">₹599</span>
-                    <span class="plan-permonth">₹49 / month + Founder badge</span>
-                </button>
-            </div>
-            <p class="premium-note">Checkout opens through Razorpay (UPI / cards) once the publishable key is configured in this build. Until then plans activate free on this device during launch — nothing is charged and no card is collected.</p>
+            <p class="premium-note">There is nothing to buy. Ghost Mesh has no subscription, no credits and no paid tier — the app is free and unlimited for everyone.</p>
 
-            <div class="premium-earn-section">
-                <p class="premium-earn-title">Or earn credits for free</p>
+            <div class="premium-earn-section hidden" aria-hidden="true">
+                <p class="premium-earn-title">No credits, no ads — nothing to earn</p>
                 <div class="credits-earn-row">
                     <button class="credits-earn-btn" id="bonus-earn-btn" onclick="claimDailyBonus()">
                         <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 2l2.9 6.6 7.1.6-5.4 4.7 1.6 7-6.2-3.7L5.8 21l1.6-7L2 9.2l7.1-.6L12 2z"/></svg>
@@ -1446,44 +1292,14 @@ if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)
 </script>
 
 <!-- ===================================================================
-     NATIVE BRIDGE TRIGGERS — AdMob + Bluetooth/Wi-Fi Direct
-     Must come AFTER script.js: it calls into the app's own functions and
-     re-uses its credits/reward flow. In a plain browser every call below
-     is skipped, so the web build behaves exactly as before.
+     NATIVE BRIDGE TRIGGERS — Bluetooth / Wi-Fi Direct / local NSD
+     Must come AFTER script.js: it calls into the app's own functions. In a
+     plain browser every call below is skipped, so the web build behaves
+     exactly as before. Ghost Mesh is free: nothing here touches an ad SDK.
      =================================================================== -->
 <script>
 (function () {
     "use strict";
-
-    // MainActivity calls gmOnRewardedAdCompleted() when it exists, and only
-    // falls back to giveUserReward() for pages that do not define it. This
-    // shim keeps both names working without ever paying twice.
-    window.giveUserReward = window.giveUserReward || function (amount) {
-        var reward = Math.max(2, parseInt(amount, 10) || 0);
-        if (typeof window.gmOnRewardedAdCompleted === "function") {
-            window.gmOnRewardedAdCompleted(reward);
-            return;
-        }
-        if (typeof addCredits === "function") addCredits(reward);
-        if (typeof renderCreditsUI === "function") renderCreditsUI();
-        if (typeof showToast === "function") showToast("+" + reward + " credits added");
-    };
-
-    // AdMob is still filling the first request: say so instead of failing.
-    window.gmOnAdLoading = function () {
-        if (typeof showToast === "function") showToast("Ad is loading… it opens by itself");
-    };
-    // The reward is already paid by gmOnRewardedAdCompleted; nothing to do.
-    window.gmOnAdClosed = window.gmOnAdClosed || function () {};
-
-    // AdMob: initialise/retry every placement and re-sync banner visibility.
-    function gmSyncNativeAds() {
-        try {
-            if (!window.Android) return;
-            if (typeof window.Android.loadAds === "function") window.Android.loadAds();
-            if (typeof window.gmSyncAdBanner === "function") window.gmSyncAdBanner();
-        } catch (e) { /* browser build: no native ads */ }
-    }
 
     // Bluetooth + Wi-Fi Direct: script.js owns Ghost ID / display name, so
     // call its starter when available and fall back to the raw bridge.
@@ -1502,21 +1318,13 @@ if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)
     }
 
     function gmBootNative() {
-        gmSyncNativeAds();
         gmStartNearbyScan();
     }
 
     if (document.readyState === "complete") setTimeout(gmBootNative, 600);
     else window.addEventListener("load", function () { setTimeout(gmBootNative, 600); });
 
-    // Console diagnostics — type gmAdDiag() or gmMeshDiag() in Chrome inspect.
-    window.gmAdDiag = function () {
-        try {
-            return window.Android && window.Android.getAdStatus
-                ? JSON.parse(window.Android.getAdStatus())
-                : "no native ads in this build";
-        } catch (e) { return String(e); }
-    };
+    // Console diagnostics — type gmMeshDiag() in Chrome inspect.
     window.gmMeshDiag = function () {
         try {
             return window.GhostNative && window.GhostNative.getDiagnostics

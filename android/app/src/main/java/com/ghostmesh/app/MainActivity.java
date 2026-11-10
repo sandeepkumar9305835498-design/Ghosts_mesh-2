@@ -66,6 +66,7 @@ import com.google.android.gms.ads.rewarded.RewardedAdLoadCallback;
 
 import org.json.JSONArray;
 import org.json.JSONException;
+import org.json.JSONObject;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -143,7 +144,25 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
     private static final int AD_MAX_ATTEMPTS = 8;
 
     private FrameLayout adContainer;
+    /**
+     * Ghost Mesh is free: advertising is switched off in code as well as in the
+     * manifest. Keeping this flag (instead of deleting the AdMob plumbing) means
+     * no lifecycle path can ever call MobileAds.initialize() or request an ad.
+     */
+    // Deliberately not `final`: Java would then treat the guard below as a
+    // constant-true condition and reject the rest of initAds() as unreachable.
+    private static boolean GM_ADS_ENABLED = false;
+
     private AdView adView;
+
+    /**
+     * Native NSD (local Wi-Fi) discovery. Unlike BLE / Wi-Fi Direct it needs no
+     * runtime permission, so it is the transport that always works on a shared
+     * router / hotspot. Peers found here are merged into the same table the
+     * Bluetooth and Wi-Fi Direct peers use.
+     */
+    private NsdDiscovery nsdDiscovery;
+    private final java.util.Map<String, MeshPeer> nsdPeers = new java.util.LinkedHashMap<>();
     private RewardedAd rewardedAd;
     private InterstitialAd interstitialAd;
     private boolean adsStarted = false, adsInitialized = false, bannerAllowed = true, bannerLoaded = false;
@@ -242,6 +261,10 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
 
     /** Called from the GhostNative bridge (always on the UI thread). */
     public void requestNativeMeshStart() {
+        // NSD needs no runtime permission, so the local-network radar starts even
+        // when Bluetooth / Wi-Fi Direct are denied or missing entirely.
+        startNsdDiscovery();
+
         if (!isNativeMeshSupported()) {
             pushNativeStatus("This device has no Bluetooth LE or Wi-Fi Direct");
             return;
@@ -394,6 +417,10 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
         if (ghostId != null && !ghostId.isEmpty()) nativeGhostId = ghostId;
         if (displayName != null && !displayName.isEmpty()) nativeDisplayName = displayName;
         if (meshService != null) meshService.setIdentity(nativeGhostId, nativeDisplayName);
+        // Keep the advertised NSD name in sync with a profile rename.
+        if (nsdDiscovery != null && nsdDiscovery.isRunning()) {
+            nsdDiscovery.updateIdentity(nativeGhostId, nativeDisplayName);
+        }
     }
 
     public void connectNativePeer(String address) {
@@ -410,12 +437,94 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
     }
 
     public void pushCurrentNativePeers() {
-        List<MeshPeer> peers = (meshService == null) ? new ArrayList<>() : meshService.snapshotPeers();
-        onNativePeers(peers);
+        onNativePeers(nativeServicePeers());
+    }
+
+    /** BLE / Wi-Fi Direct peers from the foreground service (may be empty). */
+    private List<MeshPeer> nativeServicePeers() {
+        return (meshService == null) ? new ArrayList<>() : meshService.snapshotPeers();
+    }
+
+    /** Every transport the native side knows about: BLE, Wi-Fi Direct and NSD. */
+    private List<MeshPeer> allNativePeers() {
+        List<MeshPeer> peers = nativeServicePeers();
+        for (MeshPeer peer : nsdPeers.values()) {
+            boolean alreadyThere = false;
+            for (MeshPeer existing : peers) {
+                if (existing.key().equals(peer.key())) { alreadyThere = true; break; }
+            }
+            if (!alreadyThere) peers.add(peer);
+        }
+        return peers;
+    }
+
+    // ------------------------------------------------------------------
+    // Native NSD: advertise this phone + scan the local network
+    // ------------------------------------------------------------------
+    public void startNsdDiscovery() {
+        if (nsdDiscovery == null) {
+            nsdDiscovery = new NsdDiscovery(this, new NsdDiscovery.Listener() {
+                @Override public void onPeer(String peerId, String name, String host, int port) {
+                    onNsdPeer(peerId, name, host, port);
+                }
+
+                @Override public void onPeerLost(String peerId) {
+                    runOnUiThread(() -> {
+                        nsdPeers.remove(peerId);
+                        onNativePeers(nativeServicePeers());
+                        // Drop the radar blip too.
+                        if (webView != null && peerId != null) {
+                            webView.evaluateJavascript("window.gmNativeNsdPeerLost && window.gmNativeNsdPeerLost("
+                                    + JSONObject.quote(peerId) + ");", null);
+                        }
+                    });
+                }
+
+                @Override public void onState(String state) {
+                    pushNativeStatus(state);
+                }
+            });
+        }
+        nsdDiscovery.start(nativeGhostId, nativeDisplayName);
+    }
+
+    public void stopNsdDiscovery() {
+        if (nsdDiscovery != null) nsdDiscovery.stop();
+        nsdPeers.clear();
+        onNativePeers(nativeServicePeers());
+    }
+
+    public boolean isNsdRunning() {
+        return nsdDiscovery != null && nsdDiscovery.isRunning();
+    }
+
+    /** NSD resolved a peer: add it to the lists and put a blip on the radar. */
+    private void onNsdPeer(String peerId, String name, String host, int port) {
+        if (peerId == null || peerId.isEmpty()) return;
+        runOnUiThread(() -> {
+            String address = host + ":" + port;
+            nsdPeers.put(peerId, new MeshPeer(peerId, name, address, 0, "nsd"));
+
+            // 1) the shared peer table (Online Users, Chats strip, reach list)
+            onNativePeers(nativeServicePeers());
+
+            // 2) the documented bridge callback. NSD has no coordinates, so the
+            //    web layer places the blip near this phone's own location.
+            if (webView != null) {
+                String js = "window.gmNativeNsdMeta && window.gmNativeNsdMeta("
+                        + JSONObject.quote(peerId) + ","
+                        + JSONObject.quote(name == null ? "" : name) + ","
+                        + JSONObject.quote(address) + ");"
+                        + "window.AndroidBridge && window.AndroidBridge.onPeerDiscovered && "
+                        + "window.AndroidBridge.onPeerDiscovered("
+                        + JSONObject.quote(peerId) + ",null,null);";
+                webView.evaluateJavascript(js, null);
+            }
+        });
     }
 
     public String nativePeersJson() {
-        List<MeshPeer> peers = (meshService == null) ? new ArrayList<>() : meshService.snapshotPeers();
+        List<MeshPeer> peers = allNativePeers();
         JSONArray array = new JSONArray();
         for (MeshPeer peer : peers) {
             try {
@@ -432,8 +541,18 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
     public void onNativePeers(List<MeshPeer> peers) {
         runOnUiThread(() -> {
             if (webView == null) return;
+            // Anything found over NSD belongs in the same list as BLE / Wi-Fi
+            // Direct peers, so the page has one table to render.
+            List<MeshPeer> merged = new ArrayList<>(peers);
+            for (MeshPeer nsdPeer : nsdPeers.values()) {
+                boolean alreadyThere = false;
+                for (MeshPeer peer : merged) {
+                    if (peer.key().equals(nsdPeer.key())) { alreadyThere = true; break; }
+                }
+                if (!alreadyThere) merged.add(nsdPeer);
+            }
             JSONArray array = new JSONArray();
-            for (MeshPeer peer : peers) {
+            for (MeshPeer peer : merged) {
                 try {
                     array.put(peer.toJson());
                 } catch (JSONException e) {
@@ -520,9 +639,8 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
 
         applySystemBarInsets();
 
-        // Banner slot lives under the WebView; initAds() starts MobileAds and
-        // requests the first banner as soon as the SDK is ready.
-        initAds();
+        // Ghost Mesh is free: the ad SDK is deliberately never initialised and
+        // the banner slot stays empty. No ad request is ever made.
 
         webView = findViewById(R.id.webview);
         configureWebView();
@@ -554,20 +672,46 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
      * web app's own visualViewport logic.
      */
     private void applySystemBarInsets() {
+        // Edge to edge (Android 15+ does this whether the app asks or not).
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
 
         WindowInsetsControllerCompat controller =
                 WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
         controller.setAppearanceLightStatusBars(false);
         controller.setAppearanceLightNavigationBars(false);
+        // Let the keyboard resize the content instead of panning it (a panned
+        // WebView scrolls the chat composer off screen).
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
 
+        // The manifest already says adjustResize, but with decorFitsSystemWindows
+        // == false the window no longer resizes by itself — the IME inset is the
+        // keyboard height, so pad the root by whichever is taller: the navigation
+        // bar or the keyboard. That keeps the HTML composer sitting directly on
+        // top of the keyboard.
         View root = findViewById(R.id.root);
         ViewCompat.setOnApplyWindowInsetsListener(root, (view, windowInsets) -> {
-            Insets bars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars());
-            view.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            Insets bars = windowInsets.getInsets(
+                    WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
+            Insets ime = windowInsets.getInsets(WindowInsetsCompat.Type.ime());
+            boolean keyboardOpen = windowInsets.isVisible(WindowInsetsCompat.Type.ime());
+            int bottom = Math.max(bars.bottom, keyboardOpen ? ime.bottom : 0);
+            view.setPadding(bars.left, bars.top, bars.right, bottom);
+            // Tell the page how much of the screen the keyboard eats. The web
+            // layer uses it to keep the composer above the keyboard even when a
+            // recorder / emoji row is open.
+            if (webView != null) {
+                final int imePx = keyboardOpen ? ime.bottom : 0;
+                if (imePx != lastImeInsetPx) {
+                    lastImeInsetPx = imePx;
+                    webView.post(() -> webView.evaluateJavascript(
+                            "window.gmApplyKeyboardInset && window.gmApplyKeyboardInset(" + imePx + ");", null));
+                }
+            }
             return WindowInsetsCompat.CONSUMED;
         });
     }
+
+    private int lastImeInsetPx = -1;
 
     // ------------------------------------------------------------------
     // WebView configuration
@@ -773,6 +917,8 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
     }
 
     private void initAds() {
+        // Never initialise the ad SDK in the free build.
+        if (!GM_ADS_ENABLED) return;
         if (adContainer == null) adContainer = findViewById(R.id.ad_container);
         if (adsStarted) return;
         adsStarted = true;
@@ -1085,9 +1231,30 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
      */
     public class AndroidBridge {
 
+        // ---- Local-network discovery (Android NSD) ---------------------
+        // The page calls these when "Enter the Mesh" is tapped. Peers come back
+        // through window.AndroidBridge.onPeerDiscovered(peerId, lat, lng) and
+        // window.gmApplyNativePeers().
+
+        @JavascriptInterface
+        public void startNsdDiscovery() {
+            runOnUiThread(MainActivity.this::startNsdDiscovery);
+        }
+
+        @JavascriptInterface
+        public void stopNsdDiscovery() {
+            runOnUiThread(MainActivity.this::stopNsdDiscovery);
+        }
+
+        @JavascriptInterface
+        public boolean isNsdRunning() {
+            return MainActivity.this.isNsdRunning();
+        }
+
+        /** Free build: there is no ad SDK surface any more. */
         @JavascriptInterface
         public boolean isNativeAdsAvailable() {
-            return adMobAppIdConfigured();
+            return false;
         }
 
         @JavascriptInterface
@@ -1110,22 +1277,15 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
         /** The page calls this once after load; safe to call repeatedly. */
         @JavascriptInterface
         public void loadAds() {
-            runOnUiThread(() -> {
-                initAds();
-                // A page reload is a fresh chance: give up counters start over
-                // so a banner that exhausted its retries comes back too.
-                if (bannerAttempts >= AD_MAX_ATTEMPTS) bannerAttempts = 0;
-                if (rewardedAttempts >= AD_MAX_ATTEMPTS) rewardedAttempts = 0;
-                if (interstitialAttempts >= AD_MAX_ATTEMPTS) interstitialAttempts = 0;
-                if (adsInitialized && !bannerLoaded) loadBanner();
-                loadRewarded();
-                loadInterstitial();
-            });
+            // Free build: no ads. Kept so an older cached page cannot crash.
+            runOnUiThread(() -> { /* intentionally empty */ });
         }
 
         @JavascriptInterface
         public void showRewardedAd() {
-            runOnUiThread(MainActivity.this::showRewardedAd);
+            // Free build: there is no rewarded ad to show.
+            runOnUiThread(() -> Toast.makeText(MainActivity.this,
+                    "Ghost Mesh is free — no ads", Toast.LENGTH_SHORT).show());
         }
 
         @JavascriptInterface
@@ -1301,6 +1461,11 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
         adContainer = null;
         pendingWebPermissionRequest = null;
         pendingFileChooserCallback = null;
+        if (nsdDiscovery != null) {
+            nsdDiscovery.stop();
+            nsdDiscovery = null;
+        }
+        nsdPeers.clear();
         if (meshService != null) meshService.removePeerListener(this);
         if (meshBound) {
             try {

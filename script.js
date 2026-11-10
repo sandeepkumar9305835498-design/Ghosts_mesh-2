@@ -1,5 +1,13 @@
 // ===== GHOST MESH V3 - COMPLETE SCRIPT =====
 
+// ===== 100% FREE FOREVER =====
+// Ghost Mesh is free: there are no credits, coins, tokens, premium tiers, ad
+// placeholders or tier-based restrictions. Every feature is unlocked for
+// everyone, always. The flag below is the single switch the leftovers of the
+// old credit/premium/ads code check, so nothing can silently bring a paywall or
+// an ad surface back. It is not a setting — there is no way to turn it off.
+const GM_FREE_FOR_ALL = true;
+
 // ===== STATE =====
 let userPhoneNumber = "", userGhostID = "", userDisplayName = "", userCurrentDP = null;
 let myPeerInstance = null;
@@ -444,13 +452,9 @@ function executeLogin(phone, name) {
     const identity = (typeof GMIdentity !== "undefined") ? GMIdentity.current() : null;
     userGhostID = identity ? identity.ghostId : ("Ghost-" + Math.floor(100000 + Math.random() * 899999));
     if (!identity) console.warn("No seed on this device — using a temporary Ghost ID");
-    userDisplayName = name || safeStorage.get("gm_name") || "Ghost User";
-
-    // One-time welcome bonus: brand-new Ghost ID (no credits key ever set
-    // for it before) gets 10 free starter credits.
-    if (safeStorage.get("gm_credits_" + userGhostID) === null) {
-        safeStorage.set("gm_credits_" + userGhostID, "10");
-    }
+    // Name order matters: what the person saved on the profile screen wins over
+    // whatever the login screen passed, so a reload never reverts the name.
+    userDisplayName = gmStoredDisplayName() || name || "Ghost User";
 
     const savedDP = safeStorage.get("gm_dp");
     userCurrentDP = savedDP || null;
@@ -503,9 +507,14 @@ function updateHeaderDisplay() {
 }
 
 function updateProfileScreen() {
+    // Read the stored name back every time the screen opens — the profile is the
+    // place that owns it now (see gmStoredDisplayName).
+    const stored = gmStoredDisplayName();
+    if (stored && stored !== userDisplayName) userDisplayName = stored;
     const nameInput = document.getElementById("profile-name-input");
-    if (nameInput) nameInput.value = userDisplayName;
+    if (nameInput) nameInput.value = userDisplayName || stored || "";
     document.getElementById("profile-save-btn")?.classList.add("hidden");
+    document.getElementById("profile-cancel-btn")?.classList.add("hidden");
     const gid = document.getElementById("profile-ghost-id");
     if (gid) gid.innerText = userGhostID;
     const nameDisplay = document.getElementById("profile-name-display");
@@ -514,8 +523,6 @@ function updateProfileScreen() {
     // connections that are open right now.
     const statChats = document.getElementById("profile-stat-chats");
     if (statChats) statChats.innerText = Object.keys(chatData || {}).length;
-    const statCredits = document.getElementById("profile-stat-credits");
-    if (statCredits) statCredits.innerText = getCredits();
     const statConns = document.getElementById("profile-stat-connections");
     if (statConns) statConns.innerText = (activeConnections || []).filter(c => c && c.open).length;
     setAvatarDisplay("profile-avatar-big", userCurrentDP);
@@ -619,10 +626,15 @@ function hideEl(id) {
 // Keeps the native AdMob banner out of the places store policy forbids ads in
 // (an active voice/video call) and out of the rewarded-ad screen itself.
 function gmSyncAdBanner() {
+    if (GM_FREE_FOR_ALL) {
+        // Make sure a native banner can never appear in the free build.
+        try { if (window.Android && window.Android.setBannerVisible) window.Android.setBannerVisible(false); } catch (e) {}
+        return;
+    }
     if (!window.Android || typeof window.Android.setBannerVisible !== "function") return;
     const onCall = !document.getElementById("call-screen")?.classList.contains("hidden");
-    const onAd = !document.getElementById("gm-ad-screen")?.classList.contains("hidden");
-    const show = !isPremiumUnlocked() && !onCall && !onAd;
+    // Never show a banner: the free build has no ads of any kind.
+    const show = false;
     try { window.Android.setBannerVisible(show); } catch (e) { /* no bridge */ }
 }
 
@@ -961,21 +973,79 @@ function goBackToList() {
 }
 
 // ===== PROFILE ACTIONS =====
-// The Save button only exists while the name is actually edited; it used to
-// sit on top of the input at all times, which looked like a broken form.
+// Editing the display name used to look broken: the Save button sat on the
+// input, the field was still showing the OLD value after a save (the screen was
+// re-rendered from the in-memory name before the write finished), and nothing
+// ever read localStorage back on a fresh launch, so a restart "lost" the name.
+//
+// Now localStorage is the source of truth:
+//   gm_profile_name -> what the person typed (survives reload / app restart)
+//   gm_name         -> the same value, kept for older builds + QR pairing
+const GM_PROFILE_NAME_KEY = "gm_profile_name";
+
+function gmStoredDisplayName() {
+    const stored = safeStorage.get(GM_PROFILE_NAME_KEY) || safeStorage.get("gm_name") || "";
+    return String(stored).trim();
+}
+
+// Called when the profile screen opens: always show what is really stored.
+function gmSyncProfileNameField() {
+    const input = document.getElementById("profile-name-input");
+    if (input) input.value = userDisplayName || gmStoredDisplayName() || "";
+    const display = document.getElementById("profile-name-display");
+    if (display) display.innerText = (userDisplayName || gmStoredDisplayName() || "Ghost");
+    document.getElementById("profile-save-btn")?.classList.add("hidden");
+    document.getElementById("profile-cancel-btn")?.classList.add("hidden");
+}
+
+// "Change" next to the name: open the field, select the text, raise the
+// keyboard and show Save/Cancel so the edit is obvious.
+function gmProfileBeginEdit() {
+    const input = document.getElementById("profile-name-input");
+    if (!input) return;
+    input.value = userDisplayName || gmStoredDisplayName() || "";
+    input.classList.remove("hidden");
+    document.getElementById("profile-save-btn")?.classList.remove("hidden");
+    document.getElementById("profile-cancel-btn")?.classList.remove("hidden");
+    focusProfileName();
+    try { input.select(); } catch (e) { /* not supported everywhere */ }
+}
+
 function gmProfileNameDirty() {
     document.getElementById("profile-save-btn")?.classList.remove("hidden");
+    document.getElementById("profile-cancel-btn")?.classList.remove("hidden");
 }
-function saveDisplayName() {
-    const n = document.getElementById("profile-name-input").value.trim();
-    if (!n) { showToast("Enter a name"); return; }
-    userDisplayName = n;
-    safeStorage.set("gm_name", n);
-    updateHeaderDisplay();
-    updateProfileScreen();
+
+function gmProfileCancelEdit() {
+    const input = document.getElementById("profile-name-input");
+    if (input) input.value = userDisplayName || gmStoredDisplayName() || "";
     document.getElementById("profile-save-btn")?.classList.add("hidden");
+    document.getElementById("profile-cancel-btn")?.classList.add("hidden");
+    input?.blur();
+}
+
+function saveDisplayName() {
+    const input = document.getElementById("profile-name-input");
+    const n = (input && input.value ? input.value : "").trim().replace(/\s+/g, " ");
+    if (!n) { showToast("Enter a name"); return false; }
+    if (n.length > 32) { showToast("Keep the name under 32 characters"); return false; }
+
+    userDisplayName = n;
+    // localStorage first, in-memory second: a WebView reload must find it.
+    safeStorage.set(GM_PROFILE_NAME_KEY, n);
+    safeStorage.set("gm_name", n);
+    if (safeStorage.get(GM_PROFILE_NAME_KEY) !== n) {
+        showToast("Could not save the name on this device");
+        return false;
+    }
+
+    updateHeaderDisplay();
+    gmSyncProfileNameField();
+    updateProfileScreen();
+    input?.blur();
     broadcastToMesh({ type: "name-update", sender: userGhostID, displayName: n });
     showToast("Name saved!");
+    return true;
 }
 
 // The profile screen now edits the display name only — the phone/status
@@ -1468,6 +1538,10 @@ function gmNativeMeshAvailable() {
 }
 
 function gmStartNativeDiscovery() {
+    // Android NSD (local Wi-Fi) first: it needs no Bluetooth/Wi-Fi-Direct
+    // permission, so the radar still finds nearby phones when the radios are
+    // unavailable or denied.
+    gmStartNsdDiscovery();
     if (!gmNativeMeshAvailable()) return;
     try {
         if (typeof window.GhostNative.isSupported === "function" && !window.GhostNative.isSupported()) return;
@@ -1491,6 +1565,135 @@ function gmStopNativeDiscovery() {
 // Status line pushed by the native layer (permission denied, scan started …).
 window.gmApplyNativeStatus = function (message) {
     if (message) showToast(message);
+};
+
+// ===== KEYBOARD INSET (Android WebView) =====
+// MainActivity pads the whole WebView by the IME inset (adjustResize), so the
+// page box already shrinks when the keyboard opens. This handler is the belt to
+// that braces: it records the keyboard height, keeps the chat composer in view
+// when a field is focused, and never lets the message bar hide behind the
+// keyboard after a rotation or a permission dialog.
+window.gmApplyKeyboardInset = function (px) {
+    const height = Math.max(0, Number(px) || 0);
+    document.documentElement.style.setProperty("--gm-keyboard-height", height + "px");
+    document.body.classList.toggle("gm-keyboard-open", height > 0);
+    if (height > 0) gmKeepComposerVisible();
+};
+
+function gmKeepComposerVisible() {
+    const active = document.activeElement;
+    const isField = active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA");
+    if (!isField) return;
+    // Wait one frame so the resize has landed before measuring.
+    requestAnimationFrame(() => {
+        const bar = active.closest(".composer") || active.closest(".chat-input-bar") || active;
+        try { bar.scrollIntoView({ block: "end", behavior: "smooth" }); } catch (e) {
+            try { bar.scrollIntoView(false); } catch (e2) {}
+        }
+    });
+}
+
+// Tapping a message box raises the keyboard; make sure the bar follows it.
+document.addEventListener("focusin", e => {
+    const t = e.target;
+    if (!t || (t.tagName !== "INPUT" && t.tagName !== "TEXTAREA")) return;
+    gmKeepComposerVisible();
+});
+
+// ===== NATIVE NSD (local Wi-Fi) PEERS =====
+// The Android shell advertises this phone as `_ghostmesh._tcp` and browses for
+// other phones doing the same. A resolved peer arrives as
+//
+//     window.gmNativeNsdMeta(id, name, address)          // details
+//     window.AndroidBridge.onPeerDiscovered(id, lat, lng) // the peer itself
+//
+// NSD has no GPS coordinates, so when lat/lng are missing the blip is placed a
+// few dozen metres from this phone — close enough to read as "right here" on
+// the radar without pretending to be a measured position.
+window.gmNsdPeers = window.gmNsdPeers || {};    // id -> { name, address }
+window.gmNsdBlips = window.gmNsdBlips || {};    // id -> { lat, lng, name }
+
+function gmNativeNsdBridge() {
+    return window.Android || window.GhostNative || null;
+}
+
+function gmStartNsdDiscovery() {
+    const bridge = gmNativeNsdBridge();
+    if (!bridge || typeof bridge.startNsdDiscovery !== "function") return false;
+    try {
+        bridge.startNsdDiscovery();
+        return true;
+    } catch (e) {
+        console.warn("Native NSD start failed:", e);
+        return false;
+    }
+}
+
+function gmStopNsdDiscovery() {
+    const bridge = gmNativeNsdBridge();
+    if (!bridge || typeof bridge.stopNsdDiscovery !== "function") return;
+    try { bridge.stopNsdDiscovery(); } catch (e) { /* old shell */ }
+}
+
+// Details pushed just before the peer itself (same JS tick).
+window.gmNativeNsdMeta = function (peerId, name, address) {
+    if (!peerId) return;
+    window.gmNsdPeers[peerId] = { name: name || peerId, address: address || "" };
+};
+
+// Kept as a plain object so the native layer can call it by the documented name
+// even on a build where window.Android is not injected.
+window.AndroidBridge = window.AndroidBridge || {};
+
+/**
+ * A peer was discovered on the local network by Android NSD.
+ * Adds it to the Online Users list (with a working Connect button) and drops a
+ * pulsing marker on the Radar Map.
+ */
+window.AndroidBridge.onPeerDiscovered = function (peerId, lat, lng) {
+    if (!peerId) return;
+    const meta = window.gmNsdPeers[peerId] || { name: peerId, address: "" };
+
+    // Coordinates: use them when the native side actually measured them,
+    // otherwise offset the blip near this phone.
+    let blipLat = Number(lat);
+    let blipLng = Number(lng);
+    if (!isFinite(blipLat) || !isFinite(blipLng) || (blipLat === 0 && blipLng === 0)) {
+        // ~10-60 m in each direction (0.0001° ≈ 11 m).
+        const spread = 0.0002 + Math.random() * 0.0008;
+        const angle = Math.random() * Math.PI * 2;
+        blipLat = userLat + Math.cos(angle) * spread;
+        blipLng = userLng + Math.sin(angle) * spread * 1.15;
+    }
+
+    window.gmNsdBlips[peerId] = { lat: blipLat, lng: blipLng, name: meta.name, at: Date.now() };
+
+    // Same table the BLE / Wi-Fi Direct peers use, so every list and the Chats
+    // strip pick this peer up with no extra code.
+    window.gmNativePeers = window.gmNativePeers || {};
+    window.gmNativePeers[peerId] = {
+        ghostId: peerId,
+        name: meta.name,
+        address: meta.address,
+        rssi: 0,
+        transport: "nsd",
+        lastSeen: Date.now()
+    };
+
+    try { renderOnlineUsers(); } catch (e) { console.warn("peer list refresh failed", e); }
+    try { if (radarMapInstance) gmSyncMapPins(); } catch (e) { console.warn("radar refresh failed", e); }
+
+    showToast(meta.name + " is nearby on this Wi-Fi");
+};
+
+// A peer that stopped advertising disappears from the radar and the lists.
+window.gmNativeNsdPeerLost = function (peerId) {
+    if (!peerId) return;
+    delete window.gmNsdPeers[peerId];
+    delete window.gmNsdBlips[peerId];
+    if (window.gmNativePeers) delete window.gmNativePeers[peerId];
+    try { renderOnlineUsers(); } catch (e) {}
+    try { if (radarMapInstance) gmSyncMapPins(); } catch (e) {}
 };
 
 // ===== MESH NETWORK =====
@@ -2307,6 +2510,9 @@ function openNewConnect() { closeAllMenus(); showEl("connect-modal"); }
 function gmConnectNativePeer(peerId) {
     const peer = (window.gmNativePeers || {})[peerId];
     if (!peer) { connectToPeer(peerId); return; }
+    // NSD only discovers who is on this Wi-Fi — the chat itself still opens on
+    // the peer's Ghost ID, exactly like any other online peer.
+    if (peer.transport === "nsd") { connectToPeer(peerId); return; }
     if (peer.transport !== "ble") { connectViaNativeTransport(peerId); return; }
     const name = peer.name || peerId;
     gmConfirm("Bluetooth found " + name + ". Bluetooth carries the name, not the messages — Android's WebView has no Bluetooth data link. The QR handshake opens the chat as soon as both phones are on the same Wi-Fi / hotspot.",
@@ -5234,8 +5440,31 @@ function gmSyncMapPins() {
             `<b>${p.name}</b><br>Shared location<br><button class="map-connect-btn" onclick="openChat('${peerId}')">Open Chat</button>`,
             radarMapInstance, false));
     });
+    // Nearby phones found by Android NSD: pulsing blips. Their position is
+    // either a real measurement or a small offset near this phone (see
+    // window.AndroidBridge.onPeerDiscovered) — never an invented far-away pin.
+    const nsdIds = Object.keys(window.gmNsdBlips || {});
+    nsdIds.forEach(peerId => {
+        const blip = window.gmNsdBlips[peerId];
+        if (!blip) return;
+        const marker = L.marker([blip.lat, blip.lng], {
+            icon: L.divIcon({
+                className: "gm-radar-blip-wrap",
+                html: '<span class="gm-radar-blip"></span>',
+                iconSize: [26, 26],
+                iconAnchor: [13, 13],
+                popupAnchor: [0, -14]
+            }),
+            zIndexOffset: 500
+        }).addTo(radarMapInstance).bindPopup(
+            `<b>${blip.name}</b><br>Nearby on this Wi-Fi<br>` +
+            `<button class="map-connect-btn" onclick="gmConnectNativePeer('${peerId}')">Connect</button>`
+        );
+        gmMapMarkers.push(marker);
+    });
+
     const count = document.getElementById("map-peer-count");
-    if (count) count.innerText = ids.length;
+    if (count) count.innerText = ids.length + nsdIds.length;
 }
 
 // ===== PUSH NOTIFICATION =====
@@ -5616,6 +5845,9 @@ function gmAppLockComplete() {
 // must already have a Ghost ID / profile created — an anonymous/no-profile
 // state never earns credits.
 function getCredits() {
+    // Free build: credits are gone. The function stays because chat bubbles and
+    // older screens still ask for a number; it always answers 0.
+    if (GM_FREE_FOR_ALL) return 0;
     if (!userGhostID) return 0;
     return parseInt(safeStorage.get("gm_credits_" + userGhostID) || "0", 10);
 }
@@ -5636,6 +5868,8 @@ function gmPremiumExpiry() {
     return parseInt(safeStorage.get("gm_premium_expiry_" + userGhostID) || "0", 10) || 0;
 }
 function isPremiumUnlocked() {
+    // Free build: everything is unlocked for everyone, with or without a plan.
+    if (GM_FREE_FOR_ALL) return true;
     if (!userGhostID) return false;
     if (safeStorage.get("gm_premium_" + userGhostID) !== "1") return false;
     const expiry = gmPremiumExpiry();
@@ -5659,78 +5893,15 @@ function setPremiumUnlocked() {
 }
 
 function renderCreditsUI() {
-    const amountEl = document.getElementById("credits-amount");
-    const pillAmountEl = document.getElementById("credits-pill-amount");
-    const modalAmountEl = document.getElementById("premium-modal-credits");
-    const eligMsg = document.getElementById("credits-eligibility-msg");
-    const eligMsgModal = document.getElementById("credits-eligibility-msg-modal");
-    const earnBtns = document.querySelectorAll(".credits-earn-btn");
-    const premiumBtn = document.querySelector(".premium-badge-btn");
-    const pillBtn = document.getElementById("credits-pill-btn");
-
-    const hasProfile = !!userGhostID;
-    const amount = hasProfile ? getCredits() : "—";
-    if (amountEl) amountEl.innerText = amount;
-    if (pillAmountEl) pillAmountEl.innerText = amount;
-    if (modalAmountEl) modalAmountEl.innerText = amount;
-    if (pillBtn) pillBtn.classList.toggle("credits-pill-premium", isPremiumUnlocked());
-
-    const msgText = "Create your Ghost ID first to start earning credits";
-    [eligMsg, eligMsgModal].forEach(el => {
-        if (!el) return;
-        if (!hasProfile) { el.innerText = msgText; el.classList.remove("hidden"); }
-        else el.classList.add("hidden");
-    });
-    earnBtns.forEach(b => b.disabled = !hasProfile);
-
-    // The bonus button doubles as its own countdown, so the 24h cooldown is
-    // never a surprise.
-    const bonusBtn = document.getElementById("bonus-earn-btn");
-    const bonusLabel = document.getElementById("bonus-earn-label");
-    if (bonusLabel) {
-        const wait = msUntilBonus();
-        bonusLabel.innerText = wait > 0 ? `Bonus ready in ${formatBonusWait(wait)}` : `Daily Bonus (+${BONUS_AMOUNT})`;
-    }
-    if (bonusBtn) bonusBtn.disabled = !hasProfile || msUntilBonus() > 0;
-    // Settings row mirrors the same countdown, so it never claims "ready" while
-    // the sheet's own button is still waiting.
-    const bonusState = document.getElementById("settings-bonus-state");
-    if (bonusState) {
-        const wait = msUntilBonus();
-        bonusState.innerText = hasProfile ? (wait > 0 ? "in " + formatBonusWait(wait) : "ready") : "Off";
-    }
-
-
-    if (premiumBtn) {
-        // innerHTML (not innerText) so the inline star icon survives — emoji
-        // icons are gone from the whole premium/credits surface.
-        const star = '<svg viewBox="0 0 24 24" fill="currentColor" width="11" height="11"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>';
-        premiumBtn.innerHTML = star + (isPremiumUnlocked() ? " Premium Active" : " Premium");
-    }
-
-    const profilePremiumLabel = document.getElementById("profile-premium-label");
-    if (profilePremiumLabel) {
-        const daysLeft = gmPremiumDaysLeft();
-        if (!isPremiumUnlocked()) {
-            profilePremiumLabel.innerText = "Premium";
-        } else if (daysLeft >= 0 && daysLeft <= 3) {
-            profilePremiumLabel.innerText = "Premium expires in " + daysLeft
-                + (daysLeft === 1 ? " day" : " days") + " — renew now";
-        } else {
-            profilePremiumLabel.innerText = "Premium active";
-        }
-    }
-
-    // In the APK the banner is a native AdMob view under the page. Free users
-    // see it, Premium users do not, and never during a call.
-    gmSyncAdBanner();
-
-    // Highlight the currently active plan (if any) in the plans grid
-    document.querySelectorAll(".premium-plan-btn").forEach(btn => btn.classList.remove("plan-active"));
-    const activePlan = safeStorage.get("gm_premium_plan_" + userGhostID);
-    if (activePlan) {
-        const btn = document.querySelector(`.premium-plan-btn[data-plan="${activePlan}"]`);
-        btn?.classList.add("plan-active");
+    if (GM_FREE_FOR_ALL) {
+        // Keep every credit / premium surface out of the UI entirely.
+        ["credits-card", "credits-pill-btn", "bonus-earn-btn"].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.classList.add("hidden");
+        });
+        document.querySelectorAll(".profile-premium-btn, .premium-badge-btn, .credits-pill")
+            .forEach(el => el.classList.add("hidden"));
+        return;
     }
 }
 
@@ -5753,6 +5924,11 @@ function formatBonusWait(ms) {
     return rest ? hrs + "h " + rest + "m" : hrs + "h";
 }
 function claimDailyBonus() {
+    if (GM_FREE_FOR_ALL) {
+        // No credits exist any more, so there is nothing to claim.
+        showToast("Ghost Mesh is free — there is nothing to claim");
+        return;
+    }
     if (!userGhostID) { showToast("Create your Ghost ID first to start earning credits"); return; }
     const wait = msUntilBonus();
     if (wait > 0) {
@@ -5788,12 +5964,15 @@ function gmAdMeta(name) {
 // Inside the APK, window.Android is the native AdMob bridge. Native ads are
 // the only kind Google allows inside a WebView, so they take priority.
 function gmNativeAdsAvailable() {
+    if (GM_FREE_FOR_ALL) return false;
     try {
         return !!(window.Android && typeof window.Android.isNativeAdsAvailable === "function"
             && window.Android.isNativeAdsAvailable());
     } catch (e) { return false; }
 }
 function gmAdNetwork() {
+    // Free build: no ad network of any kind is ever used.
+    if (GM_FREE_FOR_ALL) return "none";
     if (gmNativeAdsAvailable()) return "native";
     // AdSense needs a real AdSense publisher id (ca-pub-...) and a numeric
     // data-ad-slot. AdMob ids (ca-app-pub-.../unit) are NOT valid here, which
@@ -5837,56 +6016,8 @@ function gmRegisterAdView() {
 // Renders the ad itself into the slot. Kept in one function so a real network
 // can be dropped in without touching the timer/reward logic.
 function gmRenderAdSlot() {
-    const slot = document.getElementById("gm-ad-slot");
-    const tag = document.getElementById("gm-ad-tag");
-    if (!slot) return;
-    const network = gmAdNetwork();
-    slot.innerHTML = "";
-    if (tag) tag.innerText = network === "house" ? "House ad" : "Sponsored";
-    if (network === "native") {
-        slot.innerHTML = '<div class="gm-ad-house">'
-            + '<div class="gm-ad-house-mark">Google AdMob</div>'
-            + '<p>A short sponsored video opens in the app. Watch it fully to earn credits.</p>'
-            + '<span class="gm-ad-house-note">Served by Google AdMob inside the Android app.</span>'
-            + '</div>';
-    } else if (network === "adsense") {
-        const ins = document.createElement("ins");
-        ins.className = "adsbygoogle";
-        ins.style.display = "block";
-        ins.setAttribute("data-ad-client", gmAdMeta("gm-ad-client"));
-        ins.setAttribute("data-ad-slot", gmAdMeta("gm-ad-slot"));
-        ins.setAttribute("data-ad-format", "rectangle");
-        slot.appendChild(ins);
-        if (!window.__gmAdsenseLoaded) {
-            window.__gmAdsenseLoaded = true;
-            const s = document.createElement("script");
-            s.async = true;
-            s.src = "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=" +
-                encodeURIComponent(gmAdMeta("gm-ad-client"));
-            document.head.appendChild(s);
-        }
-        try { (window.adsbygoogle = window.adsbygoogle || []).push({}); } catch (e) { /* blocked */ }
-    } else if (network === "custom") {
-        const frame = document.createElement("iframe");
-        frame.src = gmAdMeta("gm-ad-html-url");
-        frame.title = "Sponsored content";
-        frame.setAttribute("sandbox", "allow-scripts allow-popups allow-same-origin");
-        slot.appendChild(frame);
-    } else {
-        // House ad: promotes the app itself, clearly labelled, no third party.
-        slot.innerHTML = '<div class="gm-ad-house">'
-            + '<div class="gm-ad-house-mark">Ghost Mesh Premium</div>'
-            + '<p>No ads while you chat, unlimited pins, custom wallpapers and HD calls — ₹99 a month.</p>'
-            + '<button class="credits-earn-btn" onclick="gmCloseSponsoredBreak();openPremiumModal()">See Premium</button>'
-            + '<span class="gm-ad-house-note">House ad — no third-party ad network is configured in this build.</span>'
-            + '</div>';
-    }
-    const note = document.getElementById("gm-ad-note");
-    if (note) {
-        note.innerText = network === "house"
-            ? "This is the app's own advert. Add an ad-network meta tag in index.html to serve third-party ads here."
-            : "Ads are provided by the configured ad network.";
-    }
+    // Free build: there is no advertiser slot anywhere in the DOM.
+    return;
 }
 
 // mode "earn" → rewarded (15s, then +2 credits). mode "theme" → 5s break.
@@ -5924,6 +6055,10 @@ window.gmOnAdClosed = function () {
 
 function gmOpenSponsoredBreak(mode) {
     closeAllMenus();
+    if (GM_FREE_FOR_ALL) {
+        showToast("Ghost Mesh is free — there are no ads to watch");
+        return;
+    }
     if (mode === "earn" && !userGhostID) { showToast("Create your Ghost ID first to start earning credits"); return; }
     if (mode === "earn" && gmAdViewsLeft() <= 0) {
         showToast("Daily sponsor limit reached — come back tomorrow");
@@ -5943,71 +6078,27 @@ function gmOpenSponsoredBreak(mode) {
         }
         return;
     }
-    gmAdState = { mode: mode === "theme" ? "theme" : "earn", endsAt: 0, claimed: false };
-    const title = document.getElementById("gm-ad-title");
-    if (title) title.innerText = gmAdState.mode === "earn" ? "Watch to earn +2 credits" : "One short word from our sponsor";
-    gmRenderAdSlot();
-    document.getElementById("gm-ad-claim")?.classList.add("hidden");
-    document.getElementById("gm-ad-continue")?.classList.add("hidden");
-    document.getElementById("gm-ad-close")?.classList.remove("hidden");
-    showEl("gm-ad-screen");
-    const total = gmAdDuration(gmAdState.mode);
-    gmAdState.endsAt = Date.now() + total;
-    gmTickSponsoredBreak(total);
-    if (gmAdTimer) clearInterval(gmAdTimer);
-    gmAdTimer = setInterval(() => gmTickSponsoredBreak(total), 250);
 }
 
 function gmTickSponsoredBreak(total) {
-    if (!gmAdState) return;
-    const left = Math.max(0, gmAdState.endsAt - Date.now());
-    const pct = Math.min(100, Math.round(((total - left) / total) * 100));
-    const fill = document.getElementById("gm-ad-progress-fill");
-    if (fill) fill.style.width = pct + "%";
-    const timer = document.getElementById("gm-ad-timer");
-    if (left > 0) {
-        if (timer) timer.innerText = gmAdState.mode === "earn"
-            ? "You can claim in " + Math.ceil(left / 1000) + "s"
-            : "Continuing in " + Math.ceil(left / 1000) + "s";
-        return;
-    }
-    if (timer) timer.innerText = gmAdState.mode === "earn" ? "Thanks for watching" : "Break over";
-    if (gmAdTimer) { clearInterval(gmAdTimer); gmAdTimer = null; }
-    if (gmAdState.mode === "earn") {
-        document.getElementById("gm-ad-claim")?.classList.remove("hidden");
-        document.getElementById("gm-ad-close")?.classList.add("hidden");
-        const claim = document.getElementById("gm-ad-claim");
-        if (claim && !gmAdState.claimed) claim.innerText = "Claim +" + GM_AD_REWARD + " credits (" + gmAdViewsLeft() + " left today)";
-    } else {
-        document.getElementById("gm-ad-continue")?.classList.remove("hidden");
-        document.getElementById("gm-ad-close")?.classList.add("hidden");
-    }
+    // Free build: no sponsored break exists to tick down.
+    return;
 }
 
 function gmClaimSponsoredCredits() {
-    if (!gmAdState || gmAdState.mode !== "earn" || gmAdState.claimed) return;
-    if (Date.now() < gmAdState.endsAt) { showToast("Watch the full sponsor break first"); return; }
-    if (gmAdViewsLeft() <= 0) { showToast("Daily sponsor limit reached — come back tomorrow"); return; }
-    gmAdState.claimed = true;
-    gmRegisterAdView();
-    addCredits(GM_AD_REWARD);
-    renderCreditsUI();
-    showToast("+" + GM_AD_REWARD + " credits added — thanks for watching");
-    gmCloseSponsoredBreak();
+    // Free build: nothing to claim, and no reward video exists.
+    return;
 }
 
 function gmCloseSponsoredBreak() {
+    // Free build: no break to close, but keep the name for older callers.
     if (gmAdTimer) { clearInterval(gmAdTimer); gmAdTimer = null; }
     gmAdState = null;
-    hideEl("gm-ad-screen");
-    const slot = document.getElementById("gm-ad-slot");
-    if (slot) slot.innerHTML = "";        // stop a video/iframe the moment it closes
-    const fill = document.getElementById("gm-ad-progress-fill");
-    if (fill) fill.style.width = "0%";
 }
 
 // Called when the chat theme changes: the ONLY automatic ad in the app.
 function gmThemeSponsorBreak(themeId) {
+    if (GM_FREE_FOR_ALL) return;   // no sponsor breaks in the free build
     if (!userGhostID) return;
     if (gmAdState) return;                // never stack two breaks
     if (safeStorage.get("gm_theme_ads_off") === "1") return;
@@ -6037,50 +6128,32 @@ function shareAppForCredits() {
 // ----- Spending -----
 // ===== SEND CREDIT TO A PEER (chat 3-dot menu) =====
 let sendCreditAmount = 5;
+// Credits are gone from the product: these names stay only so an old cached
+// page or an old chat message cannot throw.
 function openSendCreditModal() {
-    closeAllMenus();
-    if (!currentChatPeer) { showToast("Open a chat first"); return; }
-    if (isGroupChat(currentChatPeer)) { showToast("Can't send credits to a group"); return; }
-    if (!userGhostID) { showToast("Create your Ghost ID first"); return; }
-    document.getElementById("send-credit-peer-name").innerText = chatData[currentChatPeer]?.displayName || currentChatPeer;
-    pickCreditAmount(5);
-    showEl("send-credit-modal");
+    showToast("Ghost Mesh is free — there are no credits to send");
 }
-function closeSendCreditModal() { hideEl("send-credit-modal"); }
+function closeSendCreditModal() { }
 
 // ===== NOT ENOUGH CREDITS PROMPT =====
 // #not-enough-credits-modal exists in index.html but had no code behind it,
 // so its buttons did nothing and the closeNotEnoughCreditsModal() handler
 // referenced in the HTML was an undefined function.
 function showNotEnoughCredits(message) {
-    const msgEl = document.getElementById("not-enough-credits-msg");
-    if (msgEl && message) msgEl.innerText = message;
-    showEl("not-enough-credits-modal");
+    // Free build: nothing costs credits, so this can only be a stale call.
+    showToast("Ghost Mesh is free — that action costs nothing");
 }
-function closeNotEnoughCreditsModal() { hideEl("not-enough-credits-modal"); }
-function pickCreditAmount(amt) {
-    sendCreditAmount = amt;
-    document.querySelectorAll(".send-credit-amount-btn").forEach(b => b.classList.toggle("active", parseInt(b.dataset.amt) === amt));
-    document.getElementById("send-credit-confirm-btn").innerHTML =
-        '<svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M12 2a7 7 0 0 0-7 7v11l2.2-1.6L9.4 20l2.6-1.9L14.6 20l2.2-1.6L19 20V9a7 7 0 0 0-7-7zM9.5 11.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>' +
-        `<span>Send ${amt} Credit${amt>1?'s':''}</span>`;
-}
+function closeNotEnoughCreditsModal() { /* no such modal any more */ }
+function pickCreditAmount(amt) { }
 function confirmSendCredit() {
-    if (!currentChatPeer) return;
-    const amt = sendCreditAmount;
-    if (getCredits() < amt) {
-        showToast(`Not enough credits — you have ${getCredits()}`);
-        showNotEnoughCredits(`Sending ${amt} credits needs ${amt} — you have ${getCredits()}.`);
-        return;
-    }
-    setCredits(getCredits() - amt);
-    sendToChat(currentChatPeer, { type: "credit-gift", sender: userGhostID, senderName: userDisplayName, amount: amt });
-    addSystemMsg(currentChatPeer, `You sent ${amt} credits to ${chatData[currentChatPeer]?.displayName || currentChatPeer}`);
-    showToast(`Sent ${amt} credits!`);
-    closeSendCreditModal();
+    showToast("Ghost Mesh is free — there are no credits to send");
 }
 
-function openPremiumModal() { closeAllMenus(); renderCreditsUI(); showEl("premium-modal"); }
+function openPremiumModal() {
+    // There is nothing to sell any more: say so instead of opening a paywall.
+    closeAllMenus();
+    showToast("Ghost Mesh is free — every feature is already unlocked");
+}
 function closePremiumModal() { hideEl("premium-modal"); }
 
 function unlockPremiumTrial() {
@@ -6129,20 +6202,14 @@ function gmLoadRazorpay() {
     return window.__gmRazorpayLoading;
 }
 function gmActivatePremiumPlan(planId, paymentId) {
-    const plan = PREMIUM_PLANS[planId];
-    if (!plan || !userGhostID) return;
-    const expiry = Date.now() + plan.days * 24 * 60 * 60 * 1000;
-    safeStorage.set("gm_premium_" + userGhostID, "1");
-    safeStorage.set("gm_premium_plan_" + userGhostID, planId);
-    safeStorage.set("gm_premium_expiry_" + userGhostID, String(expiry));
-    if (plan.founder) safeStorage.set("gm_founder_" + userGhostID, "1");
-    if (paymentId) safeStorage.set("gm_last_payment_" + userGhostID, String(paymentId));
-    renderCreditsUI();
-    const label = document.getElementById("profile-premium-label");
-    if (label) label.innerText = "Premium active";
-    showToast(plan.label + " Premium activated — every perk is unlocked");
+    // Free build: there is no plan to activate — everything is already free.
+    showToast("Ghost Mesh is free — nothing to activate");
 }
 function buyPremiumPlan(planId) {
+    // Free build: no checkout, no subscription, no plans for sale.
+    showToast("Ghost Mesh is free — there is nothing to buy");
+    return;
+    /* eslint-disable no-unreachable */
     if (!userGhostID) { showToast("Create your Ghost ID first"); return; }
     const plan = PREMIUM_PLANS[planId];
     if (!plan) return;
@@ -6252,7 +6319,6 @@ const androidBackLayers = [
     ["app-lock-modal", () => closeAppLockSheet()],
     ["settings-sheet", () => closeSettingsSheet()],
     ["premium-modal", () => closePremiumModal()],
-    ["send-credit-modal", () => closeSendCreditModal()],
     ["not-enough-credits-modal", () => closeNotEnoughCreditsModal()],
     ["reaction-modal", () => closeReactionModal()],
     ["request-modal", () => hideEl("request-modal")],
