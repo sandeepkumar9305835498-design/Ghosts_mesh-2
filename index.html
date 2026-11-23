@@ -533,10 +533,23 @@
             <h3 class="header-title">Online Ghosts</h3>
         </header>
         <div class="online-content">
-            <p class="sub online-hint">Everyone you can talk to right now: Ghosts online over the internet, plus phones found nearby over Bluetooth or Wi-Fi Direct. Tap Connect on a row.</p>
+            <p class="sub online-hint">Everyone you can talk to right now. Ghosts using Ghost Mesh online appear here by themselves; phones on your Wi-Fi or Bluetooth show up too. Tap Connect on a row.</p>
+            <!-- Presence is a public directory, so it is one switch, explained in
+                 plain words, and remembered on the device. -->
+            <div class="lobby-row">
+                <div class="lobby-copy">
+                    <span class="lobby-title">Visible to Ghosts online</span>
+                    <span class="lobby-sub" id="lobby-state">On — anyone online sees your name and can tap Connect.</span>
+                </div>
+                <label class="radar-switch">
+                    <input type="checkbox" id="lobby-visible-toggle" checked onchange="gmSetPresenceVisible(this.checked)" aria-label="Appear to Ghosts online">
+                    <span class="radar-slider"></span>
+                </label>
+            </div>
             <div class="reach-section">
                 <div class="reach-head">
                     <span class="reach-title">Ghosts You Can Reach</span>
+                    <span class="lobby-count" id="lobby-online-count">Nobody online yet</span>
                     <span class="nearby-count" id="online-reach-count">0</span>
                 </div>
                 <div id="online-reach-list" class="reach-list"></div>
@@ -790,7 +803,7 @@
     <div id="privacy-modal" class="modal-overlay hidden" role="dialog" aria-label="Privacy Policy" onclick="if(event.target===this)closePrivacyPolicy()">
         <div class="modal-box privacy-box">
             <h4>Privacy Policy</h4>
-            <p class="sub">Last updated 23 October 2026</p>
+            <p class="sub">Last updated 23 November 2026</p>
             <div class="privacy-body">
                 <h5>In one sentence</h5>
                 <p>Ghost Mesh has no account server and no cloud database — your messages, contacts and profile stay on your phone.</p>
@@ -800,6 +813,8 @@
                 <p>Chats, settings, your display name and your Ghost ID are stored in this app's local storage on your device. They are not uploaded anywhere.</p>
                 <h5>Direct connections</h5>
                 <p>Messages and calls travel directly between two devices using WebRTC. When pairing over the internet, the public PeerJS broker is used only to exchange connection metadata; message content goes device to device.</p>
+                <h5>Online presence</h5>
+                <p>When you are online, a small beacon with your Ghost ID and display name is published so other Ghosts can find you. It contains no messages, phone number or location, and the switch on the Online screen hides you completely.</p>
                 <h5>Advertising</h5>
                 <p>There are no ads. Ghost Mesh does not initialise an ad SDK, does not use an advertising ID, and has no paid tier or credits of any kind.</p>
                 <h5>Location</h5>

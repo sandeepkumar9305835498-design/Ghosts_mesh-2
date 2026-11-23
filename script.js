@@ -471,6 +471,8 @@ function executeLogin(phone, name) {
     requestNotificationPermission();
     startOnlinePresenceBroadcast();
     gmStartNativeDiscovery();
+    // Everyone running Ghost Mesh shows up here by themselves — no ID exchange.
+    gmStartPresence();
     gmStartSessionGuard();
 
     // FIX: app must be fully usable with zero internet. If there's no
@@ -486,8 +488,16 @@ function executeLogin(phone, name) {
     }
 }
 
-window.addEventListener("online", () => showToast("Back online"));
-window.addEventListener("offline", () => showToast("No internet — WiFi tab still works fully offline"));
+window.addEventListener("online", () => {
+    showToast("Back online");
+    if (userGhostID && !gmPresencePolling) gmStartPresence();
+});
+window.addEventListener("offline", () => {
+    showToast("No internet — WiFi tab still works fully offline");
+    // No point burning the radio on a lobby we cannot reach; startPresence runs
+    // again from the "online" handler above and on the next launch.
+    gmStopPresence();
+});
 
 function updateHeaderDisplay() {
     // The Ghost ID comes from the local seed, so it is valid before any network
@@ -542,6 +552,7 @@ function logoutApp() {
     // device-local profile (name/phone/PIN) is cleared.
     gmConfirm("Log out of Ghost Mesh? " + detail, () => {
         gmStopNativeDiscovery();
+        gmStopPresence();
         safeStorage.del("gm_phone"); safeStorage.del("gm_pin"); safeStorage.del("gm_name");
         location.reload();
     }, { title: "Log out", confirmLabel: "Log out" });
@@ -937,6 +948,178 @@ function startLobbyDiscovery() {
     }
     pollLobbyDiscovery();
     lobbyPollInterval = setInterval(pollLobbyDiscovery, 12000);
+}
+
+// ===== ONLINE PRESENCE (everyone online shows up by themselves) =====
+//
+// The PeerJS public broker cannot list peers, so the Online screen used to stay
+// empty until two people had already swapped a Ghost ID or scanned a QR — the
+// app felt dead on a fresh install. Ghost Mesh now keeps a tiny presence
+// channel on a public pub/sub topic (ntfy.sh: no account, no key, plain HTTP):
+// every running app posts a beacon with its Ghost ID + display name, and reads
+// the beacons of everyone else. Presence is only a directory — the chat itself
+// still opens over WebRTC directly between the two phones, and no message ever
+// touches the topic.
+//
+// The topic can be pointed elsewhere with <meta name="gm-presence-url"> and
+// <meta name="gm-presence-topic">, so a self-hosted ntfy keeps the lobby private.
+const GM_PRESENCE_DEFAULT_BASE = "https://ntfy.sh";
+const GM_PRESENCE_DEFAULT_TOPIC = "ghostmesh-lobby-v1";
+const GM_PRESENCE_ANNOUNCE_MS = 20000;
+const GM_PRESENCE_POLL_MS = 15000;
+const GM_PRESENCE_TTL_MS = 70000;
+let gmPresencePeers = {};           // ghostId -> { name, seen }
+let gmPresencePollTimer = null, gmPresenceAnnounceTimer = null;
+let gmPresencePolling = false;
+
+function gmPresenceBase() {
+    const meta = document.querySelector('meta[name="gm-presence-url"]');
+    const value = String((meta && meta.content) || "").trim();
+    return (value || GM_PRESENCE_DEFAULT_BASE).replace(/\/+$/, "");
+}
+function gmPresenceTopic() {
+    const meta = document.querySelector('meta[name="gm-presence-topic"]');
+    const value = String((meta && meta.content) || "").trim();
+    return value || GM_PRESENCE_DEFAULT_TOPIC;
+}
+function gmPresenceURL(suffix) {
+    return gmPresenceBase() + "/" + encodeURIComponent(gmPresenceTopic()) + (suffix || "");
+}
+
+// Visible by default, because an empty Online screen is the bug this fixes.
+// The Online screen's switch flips it, and the choice is remembered.
+function gmPresenceVisible() {
+    return safeStorage.get("gm_lobby_visible") !== "0";
+}
+function gmPresenceIdOk(id) {
+    return typeof id === "string" && /^Ghost-[A-Za-z0-9]{4,20}$/.test(id);
+}
+function gmPresenceCleanName(name, id) {
+    const clean = String(name || "").replace(/[\u0000-\u001f\u007f<>]/g, "").trim().slice(0, 32);
+    return clean || id;
+}
+
+function gmPresenceAnnounce() {
+    if (!userGhostID || !navigator.onLine || !gmPresenceVisible()) return;
+    const body = JSON.stringify({ g: userGhostID, n: gmPresenceCleanName(userDisplayName, userGhostID), v: 1 });
+    try {
+        fetch(gmPresenceURL(""), {
+            method: "POST",
+            body,
+            cache: "no-store",
+            headers: { "Content-Type": "text/plain" }
+        }).catch(() => { /* lobby unreachable: the next tick retries */ });
+    } catch (e) { /* no fetch in this shell — other discovery paths still work */ }
+}
+
+// One beacon -> one row in every list that already understands discoveredPeers.
+function gmPresenceApply(payload) {
+    if (!payload || typeof payload !== "object") return false;
+    const id = String(payload.g || "");
+    if (!gmPresenceIdOk(id) || id === userGhostID) return false;
+    if (blockedPeers.has(id) || isGroupChat(id)) return false;
+    const name = gmPresenceCleanName(payload.n, id);
+    gmPresencePeers[id] = { name, seen: Date.now() };
+    discoveredPeers[id] = true;
+    onlineUsers[id] = { displayName: name, online: true };
+    return true;
+}
+
+function gmPresenceExpire() {
+    const now = Date.now();
+    Object.keys(gmPresencePeers).forEach(id => {
+        if (now - gmPresencePeers[id].seen <= GM_PRESENCE_TTL_MS) return;
+        delete gmPresencePeers[id];
+        delete discoveredPeers[id];
+        // A peer we are actually connected to stays online; presence only
+        // decides who is reachable without a connection.
+        if (!activeConnections.some(c => c.peer === id && c.open)) delete onlineUsers[id];
+    });
+}
+
+function gmPresencePoll() {
+    if (!gmPresencePolling) return;
+    let request;
+    try {
+        request = fetch(gmPresenceURL("/json?poll=1&since=45s"), { cache: "no-store" });
+    } catch (e) { return; }
+    request
+        .then(r => (r && r.ok ? r.text() : ""))
+        .then(text => {
+            if (typeof text === "string" && text) {
+                text.split("\n").forEach(line => {
+                    if (!line.trim()) return;
+                    let event;
+                    try { event = JSON.parse(line); } catch (e) { return; }
+                    if (!event || event.event !== "message" || !event.message) return;
+                    let beacon;
+                    try { beacon = JSON.parse(event.message); } catch (e) { return; }
+                    gmPresenceApply(beacon);
+                });
+            }
+            gmPresenceExpire();
+            if (userGhostID) { try { renderOnlineUsers(); } catch (e) { /* pre-login */ } }
+            gmSyncPresenceUI();
+        })
+        .catch(() => { gmPresenceExpire(); });
+}
+
+function gmStartPresence() {
+    if (!userGhostID) return;
+    gmStopPresence();
+    gmPresencePolling = true;
+    gmPresenceAnnounce();
+    gmPresencePoll();
+    gmPresenceAnnounceTimer = setInterval(gmPresenceAnnounce, GM_PRESENCE_ANNOUNCE_MS);
+    gmPresencePollTimer = setInterval(gmPresencePoll, GM_PRESENCE_POLL_MS);
+    gmSyncPresenceUI();
+}
+
+function gmStopPresence() {
+    gmPresencePolling = false;
+    if (gmPresencePollTimer) { clearInterval(gmPresencePollTimer); gmPresencePollTimer = null; }
+    if (gmPresenceAnnounceTimer) { clearInterval(gmPresenceAnnounceTimer); gmPresenceAnnounceTimer = null; }
+}
+
+// Turning visibility off stops the beacon but keeps reading, so the person can
+// still see who is around while they stay hidden. Presence rows we only knew
+// from the lobby are dropped straight away.
+function gmSetPresenceVisible(on) {
+    safeStorage.set("gm_lobby_visible", on ? "1" : "0");
+    if (on) {
+        if (!gmPresencePolling) gmStartPresence();
+        else gmPresenceAnnounce();
+        showToast("You are visible to Ghosts online");
+    } else {
+        if (gmPresenceAnnounceTimer) { clearInterval(gmPresenceAnnounceTimer); gmPresenceAnnounceTimer = null; }
+        gmPresencePeers = {};
+        Object.keys(discoveredPeers).forEach(id => {
+            if (!activeConnections.some(c => c.peer === id && c.open)) {
+                delete discoveredPeers[id];
+                delete onlineUsers[id];
+            }
+        });
+        showToast("You are hidden from the online lobby");
+    }
+    gmSyncPresenceUI();
+    if (userGhostID) { try { renderOnlineUsers(); } catch (e) {} }
+}
+
+function gmSyncPresenceUI() {
+    const toggle = document.getElementById("lobby-visible-toggle");
+    const state = document.getElementById("lobby-state");
+    const count = document.getElementById("lobby-online-count");
+    const visible = gmPresenceVisible();
+    if (toggle && toggle.checked !== visible) toggle.checked = visible;
+    if (state) {
+        state.innerText = visible
+            ? "On — anyone online sees your name and can tap Connect."
+            : "Off — you stay hidden and only see people you already know.";
+    }
+    if (count) {
+        const n = Object.keys(onlineUsers).filter(id => onlineUsers[id] && onlineUsers[id].online).length;
+        count.innerText = n ? n + " online now" : "Nobody online yet";
+    }
 }
 
 function refreshOnlineUsers() {
@@ -2439,7 +2622,10 @@ function renderPeopleListInto(containerId, peers, options) {
         const alreadyConnected = activeConnections.some(c => c.peer === peerId && c.open);
         const known = onlineUsers[peerId];
         const native = (window.gmNativePeers || {})[peerId];
-        const isFreshDiscovery = (!known && !!discoveredPeers[peerId]) || !!native;
+        // A presence beacon fills BOTH tables (onlineUsers for the strip,
+        // discoveredPeers for this list), so "known" alone used to label a live
+        // Ghost as offline with a Reconnect button. Online means online.
+        const isFreshDiscovery = (!!known && known.online === true) || !!discoveredPeers[peerId] || !!native;
         const displayName = known ? known.displayName : (native && native.name ? native.name : peerId);
         let transport = "";
         if (native) transport = native.transport === "wifi-direct" ? " · Wi-Fi Direct" : " · Bluetooth";
