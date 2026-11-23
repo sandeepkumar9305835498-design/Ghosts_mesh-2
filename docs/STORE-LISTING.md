@@ -83,6 +83,7 @@ Every feature is unlocked for everyone. There is no subscription, no credits, no
 PRIVACY BY DEFAULT
 
 • No analytics, no trackers, no advertising ID
+• You are visible to other online Ghosts by name only, and one switch hides you
 • No cloud backup: Android backup is switched off for this app
 • Location is off until you choose to share it in a chat or open the map
 • Camera and microphone are used only while you are scanning a QR code, recording a voice note or in a call
@@ -97,7 +98,7 @@ GOOD TO KNOW
 Ghost Mesh is an independent project, built as a free public good for people who want to talk without handing their conversations to a platform.
 ```
 
-Length: 2,448 characters — comfortably inside 4,000, and long enough to rank for
+Length: 2,528 characters — comfortably inside 4,000, and long enough to rank for
 "offline chat", "P2P messenger", "no account chat", "private messenger".
 
 ---
@@ -143,11 +144,11 @@ so the honest answers are:
 | Question | Answer |
 | --- | --- |
 | Does your app collect or share any of the required user data types? | **Yes** (peer-to-peer sharing counts as sharing) |
-| Data types | **Messages** (shared with other users, user-initiated), **Photos and videos** (user-selected, shared with other users), **Files and docs** (user-selected), **Audio** (voice notes/calls), **Location** (approximate + precise, only when the user taps share), **Contacts** — none (the app never reads the address book) |
+| Data types | **Messages** (shared with other users, user-initiated), **Photos and videos** (user-selected, shared with other users), **Files and docs** (user-selected), **Audio** (voice notes/calls), **Location** (approximate + precise, only when the user taps share), **Device or other IDs** (the Ghost ID plus display name in the online-presence beacon, switchable off on the Online screen), **Contacts** — none (the app never reads the address book) |
 | Is the data encrypted in transit? | **Yes** — WebRTC DTLS |
 | Can users request data deletion? | **Yes** — clear a chat, Clear All Chats, or uninstall |
 | Is data collected for advertising or analytics? | **No** |
-| Is data shared with third parties? | **No** (the relay sees connection metadata only) |
+| Is data shared with third parties? | **Presence only**: the Ghost ID + display name go through a public pub/sub relay (ntfy.sh) so other online users can find you; message content never does. Turn it off on the Online screen. |
 | Is data used for tracking? | **No** |
 
 Do **not** tick "No data collected": the app legally shares messages and location

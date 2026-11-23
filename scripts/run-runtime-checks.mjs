@@ -277,7 +277,10 @@ window.openOnlineUsers();
 ok("Nearby Ghosts opens the Online screen",
     hidden("online-screen") === false && hidden("profile-screen") === true);
 ok("the Online screen explains what it lists",
-    /Bluetooth or Wi-Fi Direct/.test($("online-screen").textContent));
+    /appear here by themselves/.test($("online-screen").textContent) &&
+    /Bluetooth/.test($("online-screen").textContent) &&
+    /Wi-Fi/.test($("online-screen").textContent),
+    $("online-screen").textContent.slice(0, 120));
 window.closeOnlineScreen();
 ok("the Online screen has a back button to the chats",
     hidden("online-screen") === true && hidden("chatlist-screen") === false);
@@ -1194,6 +1197,70 @@ ok("the right PIN unlocks the idle-locked app",
     ok("lobby polling stops without leaking an interval",
         window.eval("gmStopLobbyDiscovery(); lobbyPollInterval") === null,
         String(window.eval("lobbyPollInterval")));
+}
+
+// ------------------------------- online presence (people appear by themselves)
+// A fresh install used to show an empty Online screen until two people had
+// already swapped a Ghost ID. Every running app now posts/reads a small beacon
+// on a public topic; these checks pin the directory behaviour down.
+{
+    for (const fn of ["gmStartPresence", "gmStopPresence", "gmSetPresenceVisible",
+        "gmPresenceApply", "gmPresenceExpire", "gmPresenceAnnounce", "gmSyncPresenceUI"]) {
+        ok(`window.${fn} is a function`, typeof window[fn] === "function", typeof window[fn]);
+    }
+    ok("presence points at the public lobby topic",
+        window.eval("gmPresenceURL('/json?poll=1&since=45s')") === "https://ntfy.sh/ghostmesh-lobby-v1/json?poll=1&since=45s",
+        window.eval("gmPresenceURL('/json?poll=1&since=45s')"));
+
+    window.eval("gmStopPresence(); gmPresencePeers = {}; discoveredPeers = {}; onlineUsers = {};");
+    ok("a stranger's beacon becomes a reachable Ghost",
+        window.gmPresenceApply({ g: "Ghost-ABCDEF", n: "Ravi", v: 1 }) === true &&
+        window.eval("!!discoveredPeers['Ghost-ABCDEF']") === true);
+    ok("the beacon carries the display name",
+        window.eval("onlineUsers['Ghost-ABCDEF'].displayName") === "Ravi",
+        window.eval("onlineUsers['Ghost-ABCDEF'].displayName"));
+    window.renderOnlineUsers();
+    ok("the online screen lists the new Ghost",
+        ($("online-reach-list")?.textContent || "").includes("Ravi"),
+        $("online-reach-list")?.textContent || "");
+    ok("a beacon cannot inject markup into the name",
+        window.gmPresenceApply({ g: "Ghost-HTMLXX", n: "<img src=x onerror=1>", v: 1 }) === true &&
+        !/</.test(window.eval("onlineUsers['Ghost-HTMLXX'].displayName")),
+        window.eval("onlineUsers['Ghost-HTMLXX'].displayName"));
+    const liveGhostId = window.eval("userGhostID");
+    ok("our own beacon is ignored", window.gmPresenceApply({ g: liveGhostId, n: "me" }) === false,
+        String(liveGhostId) + " / " + window.eval("gmPresenceIdOk(userGhostID)"));
+    ok("a junk id is ignored", window.gmPresenceApply({ g: "not-a-ghost", n: "x" }) === false &&
+        window.gmPresenceApply(null) === false);
+    ok("a blocked Ghost never shows up", (() => {
+        window.eval("blockedPeers.add('Ghost-BLOCKD')");
+        const added = window.gmPresenceApply({ g: "Ghost-BLOCKD", n: "Blocked" });
+        window.eval("blockedPeers.delete('Ghost-BLOCKD')");
+        return added === false;
+    })());
+
+    // Stale beacons fall off instead of leaving ghosts online forever.
+    window.eval("gmPresencePeers['Ghost-ABCDEF'].seen = Date.now() - 10 * 60 * 1000;");
+    window.gmPresenceExpire();
+    ok("a silent Ghost drops offline after the TTL",
+        window.eval("!!discoveredPeers['Ghost-ABCDEF']") === false &&
+        window.eval("!!onlineUsers['Ghost-ABCDEF']") === false);
+
+    // Visibility switch: off hides us and clears lobby-only rows, on brings it back.
+    window.gmSetPresenceVisible(false);
+    ok("hiding yourself is remembered", window.eval("safeStorage.get('gm_lobby_visible')") === "0");
+    ok("hiding clears the lobby-only rows",
+        window.eval("Object.keys(gmPresencePeers).length") === 0);
+    ok("the switch reflects the saved choice", $("lobby-visible-toggle").checked === false &&
+        /hidden/i.test($("lobby-state").innerText), $("lobby-state").innerText);
+    window.gmSetPresenceVisible(true);
+    ok("turning presence back on says so", /visible/i.test(toastText()), toastText());
+    ok("the switch turns back on", $("lobby-visible-toggle").checked === true);
+
+    window.gmStopPresence();
+    window.eval("gmPresencePeers = {}; discoveredPeers = {}; onlineUsers = {};");
+    ok("presence stops without leaking intervals",
+        window.eval("gmPresencePollTimer === null && gmPresenceAnnounceTimer === null") === true);
 }
 
 // ---------------------------------------------- nothing logged an error

@@ -431,6 +431,23 @@ if (/watchAdForCredits|quickAddCredit/.test(scriptSource)) {
 if (/Earn Credits|Watch a Sponsor|Premium/i.test(menuHtml)) {
     extrasProblems.push("the 3-dot menu still advertises credits/premium");
 }
+// Online presence: every running app must announce itself and list the others
+// without an ID exchange (the FreeFire-style lobby), and the switch that hides
+// you has to exist in the Online screen.
+for (const fn of ["gmStartPresence", "gmStopPresence", "gmSetPresenceVisible",
+    "gmPresenceApply", "gmPresencePoll", "gmPresenceExpire", "gmSyncPresenceUI"]) {
+    if (!defined.has(fn)) extrasProblems.push(fn + "() is missing — the lobby would stay empty");
+}
+if (!/GM_PRESENCE_DEFAULT_TOPIC = "ghostmesh-lobby-v1"/.test(scriptSource)) {
+    extrasProblems.push("the presence topic constant is gone");
+}
+if (!/gmStartPresence\(\);/.test(scriptSource)) {
+    extrasProblems.push("login never starts presence — nobody would appear online");
+}
+for (const id of ["lobby-visible-toggle", "lobby-state", "lobby-online-count"]) {
+    if (!htmlIds.has(id)) extrasProblems.push("missing #" + id);
+}
+
 // Native NSD discovery has to be wired on both sides of the bridge.
 if (!/startNsdDiscovery/.test(scriptSource)) extrasProblems.push("the page never starts Android NSD");
 if (!/onPeerDiscovered/.test(scriptSource)) extrasProblems.push("the native NSD callback is missing in script.js");
