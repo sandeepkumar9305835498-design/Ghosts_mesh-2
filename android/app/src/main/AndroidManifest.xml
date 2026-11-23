@@ -65,8 +65,13 @@
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
     <uses-feature android:name="android.hardware.wifi.direct" android:required="false" />
 
+    <!-- allowBackup is OFF on purpose. Chats, the recovery phrase and the profile
+         are stored in this app's private storage, and Android's auto-backup
+         would upload them to the user's Drive — the opposite of "no cloud".
+         Backup is the user's own export (recovery phrase), not Google's. -->
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
         android:hardwareAccelerated="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"

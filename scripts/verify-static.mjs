@@ -638,6 +638,46 @@ if (/\.gm-screen-(fade|push)[^{]*\{[^}]*\bboth\b/.test(css.replace(/\n/g, " ")))
 if (!/reach-caption/.test(css)) privacyProblems.push("the WiFi panel caption style is missing");
 check("account privacy, map layout and the transport split are wired", privacyProblems);
 
+// ------------------------------------------- store + free-build hygiene
+// These are the things that get an upload rejected or quietly turn a free app
+// back into an ad/payment product. They are cheap to check and easy to undo by
+// accident, so they are locked down here.
+const storeProblems = [];
+for (const meta of ["gm-razorpay-key", "gm-admob-app-id", "gm-ad-slot", "gm-ad-client", "gm-ad-network"]) {
+    if (html.includes('name="' + meta + '"')) storeProblems.push("index.html still has a " + meta + " meta tag");
+}
+if (/checkout\.razorpay\.com/.test(scriptSource)) storeProblems.push("script.js still loads the Razorpay checkout script");
+for (const f of ["scripts/admob-config.js", "scripts/rahulpay-config.js"]) {
+    if (exists(f)) storeProblems.push(f + " is back (no ad/payment config may ship)");
+}
+// The pin action used to advertise "go Premium for unlimited pins".
+if (/go Premium/i.test(scriptSource)) storeProblems.push("a Premium upsell is back in the chat UI");
+if (!/const GM_CHATS_KEY_PREFIX = "gm_chats_"/.test(scriptSource)) {
+    storeProblems.push("chat history is no longer saved locally (threads would vanish on restart)");
+}
+// The privacy policy has to describe the app that actually ships.
+const policySource = read("privacy.html");
+if (/Razorpay|Premium plans|launch offer/i.test(policySource)) {
+    storeProblems.push("privacy.html still describes premium payments");
+}
+if (!/no in-app purchases/i.test(policySource)) {
+    storeProblems.push("privacy.html does not say the app has no in-app purchases");
+}
+// Play rejects uploads below the required target API level (API 36 since
+// 31 Aug 2026), and allowBackup would upload private chats to Google Drive.
+const appGradle = read("android/app/build.gradle");
+if (!/targetSdk 36/.test(appGradle) || !/compileSdk 36/.test(appGradle)) {
+    storeProblems.push("compileSdk/targetSdk are not 36 — Play rejects new uploads below API 36");
+}
+const manifestSource = read("android/app/src/main/AndroidManifest.xml");
+if (!/android:allowBackup="false"/.test(manifestSource)) {
+    storeProblems.push("allowBackup is on — Android would back up private chats to the cloud");
+}
+if (exists("docs/STORE-LISTING.md") && !/Short description/.test(read("docs/STORE-LISTING.md"))) {
+    storeProblems.push("docs/STORE-LISTING.md lost its store copy");
+}
+check("store listing, target SDK and free-build hygiene hold", storeProblems);
+
 // ---------------------------------------------------------------- report
 const failed = results.filter(r => r.problems.length);
 for (const r of results) {

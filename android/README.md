@@ -16,18 +16,20 @@ android/
 │       ├── java/com/ghostmesh/app/MainActivity.java
 │       ├── res/layout/activity_main.xml ← WebView fills the padded root
 │       └── res/values/                  ← strings, colors (match style.css), dark theme
-└── gradle/wrapper/                      ← Gradle 8.9 wrapper
+└── gradle/wrapper/                      ← Gradle 8.11.1 wrapper
 ```
 
 ## Open it
 
 1. Android Studio → **Open** → select this `android/` folder (not the repo root).
-2. Let it sync. The first sync downloads Gradle 8.9, the Android Gradle Plugin
-   8.7.3 and Android **SDK 35** (accept the install prompt if it appears).
+2. Let it sync. The first sync downloads Gradle 8.11.1, the Android Gradle Plugin
+   8.9.1 and Android **SDK 36** (accept the install prompt if it appears).
 3. Run ▶ on a device/emulator. `MainActivity` loads
    `https://appassets.androidplatform.net/assets/www/index.html`.
 
-Requirements: Android Studio Koala/Ladybug (2024.1) or newer, JDK 17.
+Requirements: Android Studio Meerkat (2024.3.1) or newer, JDK 17. Android 16
+(API 36) is required by Google Play for every new app and update since
+31 Aug 2026, which is why `compileSdk`/`targetSdk` are 36.
 `local.properties` (your SDK path) is created by Android Studio and is gitignored.
 
 ## Editing the web app

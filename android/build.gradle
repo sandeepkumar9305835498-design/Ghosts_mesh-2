@@ -1,4 +1,7 @@
 // Top-level build file. Plugin versions live here and are applied in :app.
 plugins {
-    id 'com.android.application' version '8.7.3' apply false
+    // AGP 8.9.1 is the first stable plugin that knows Android 16 (API 36),
+    // which Google Play requires for new apps and updates since 31 Aug 2026.
+    // It needs Gradle 8.11.1+ (gradle/wrapper/gradle-wrapper.properties).
+    id 'com.android.application' version '8.9.1' apply false
 }

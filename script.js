@@ -16,20 +16,11 @@ let gmPendingConnectIds = [];
 let activeConnections = [];
 let chatData = {};
 
-// ============ External config (read from meta tags in index.html) ============
-// These are the single source of truth for Razorpay publishable key ID and
-// AdMob app ID in the web build. Do not paste live keys into this file.
-(function () {
-    var metaRazorpay = document.querySelector('meta[name="gm-razorpay-key"]');
-    var metaAdMob = document.querySelector('meta[name="gm-admob-app-id"]');
-    window.GM_RAZORPAY_KEY_ID = (metaRazorpay && metaRazorpay.content) || "";
-    window.ADMOB_CONFIG = {
-        appId: (metaAdMob && metaAdMob.content) || "",
-        bannerUnitId: (document.querySelector('meta[name="gm-ad-slot"]') && document.querySelector('meta[name="gm-ad-slot"]').content) || "",
-        interstitialUnitId: (document.querySelector('meta[name="gm-ad-interstitial-unit"]') && document.querySelector('meta[name="gm-ad-interstitial-unit"]').content) || "",
-        rewardedUnitId: (document.querySelector('meta[name="gm-ad-rewarded-unit"]') && document.querySelector('meta[name="gm-ad-rewarded-unit"]').content) || ""
-    };
-})();
+// ============ External config ============
+// Nothing to configure: Ghost Mesh has no payment provider and no ad network.
+// There is no checkout key, no ad unit id and no feature that needs one. If a
+// gate for either ever needs adding, it belongs behind a real product decision,
+// not a meta tag a cached page could still carry.
 
 let currentChatPeer = null;
 let typingTimeout = null;
@@ -467,6 +458,7 @@ function executeLogin(phone, name) {
 
     updateHeaderDisplay();
     updateProfileScreen();
+    gmLoadChats();
     loadBlockedPeers();
     initMesh();
     // The radar map is deliberately NOT initialised here any more: it used to
@@ -2033,6 +2025,7 @@ function setupConn(conn) {
                     selfDestruct: data.selfDestruct
                 };
                 chatData[chatId].messages.push(msg);
+                gmTouchChats();
                 const chatPreview = data.text || (data.contentType === "location" ? "📍 Location" : "Media");
                 chatData[chatId].lastMsg = (data.groupId ? (data.senderName || data.sender) + ": " : "") + chatPreview;
                 chatData[chatId].lastTime = msg.time;
@@ -2127,14 +2120,6 @@ function setupConn(conn) {
                 break;
             }
 
-            case "credit-gift": {
-                addCredits(data.amount || 0);
-                if (chatData[data.sender]) {
-                    addSystemMsg(data.sender, `${data.senderName || data.sender} sent you ${data.amount} credits!`);
-                }
-                showToast(`+${data.amount} credits from ${data.senderName || data.sender}`);
-                break;
-            }
             case "location": {
                 const chatId = data.groupId || data.sender;
                 showToast((data.senderName || data.sender) + " shared location");
@@ -2144,7 +2129,7 @@ function setupConn(conn) {
                 gmRememberPeerLocation(data.sender, data.lat, data.lng, data.senderName);
                 if (currentChatPeer === chatId) {
                     const lm = { id: "loc-"+Date.now(), sender: data.sender, text: "", direction: "incoming", dp: data.senderDP, contentType: "location", mediaPayload: { lat: data.lat, lng: data.lng }, time: nowTime() };
-                    if (chatData[chatId]) chatData[chatId].messages.push(lm);
+                    if (chatData[chatId]) { chatData[chatId].messages.push(lm); gmTouchChats(); }
                     renderMessage(lm);
                 }
                 break;
@@ -2259,10 +2244,147 @@ function initChatData(peerId) {
     }
 }
 
+// ===== LOCAL CHAT HISTORY =====
+// Chats live on this device and nowhere else — the privacy policy promises
+// exactly that. Before this the thread was memory-only, so closing the app (or
+// the Android shell being killed in the background) silently erased every
+// conversation while Settings still said "Clear all chats" as if they existed.
+// The key is per Ghost ID, so recovering a different identity cannot mix two
+// people's threads. Nothing here ever leaves the phone.
+const GM_CHATS_KEY_PREFIX = "gm_chats_";
+const GM_CHATS_MAX_MESSAGES = 200;      // newest messages kept per chat
+const GM_CHATS_MAX_CHARS = 3000000;     // ~3 MB: leaves room under the ~5 MB quota
+let gmChatSaveTimer = null;
+
+function gmChatsStorageKey() {
+    return userGhostID ? GM_CHATS_KEY_PREFIX + userGhostID : "";
+}
+// Group membership lives outside chatData (chatData only holds the thread), so
+// it needs its own key — otherwise a restored group would come back as a 1:1
+// chat and sends would go to an id nobody is listening on.
+function gmGroupsStorageKey() {
+    return userGhostID ? "gm_groups_" + userGhostID : "";
+}
+
+// A blob: URL is only valid for the page that created it, so it is dropped on
+// save instead of being restored as a broken media bubble.
+function gmChatMessageRestorable(m) {
+    if (!m || typeof m !== "object") return false;
+    const media = m.mediaPayload;
+    // blob: URLs (voice notes recorded in-session) die with the page, so they
+    // are dropped on save rather than restored as a broken bubble.
+    return !(typeof media === "string" && media.indexOf("blob:") === 0);
+}
+
+function gmSerializeChats() {
+    const out = {};
+    Object.keys(chatData).forEach(peerId => {
+        const chat = chatData[peerId];
+        if (!chat || !Array.isArray(chat.messages)) return;
+        const messages = chat.messages.filter(gmChatMessageRestorable).slice(-GM_CHATS_MAX_MESSAGES);
+        // A chat that never got a message is still worth keeping if it was
+        // named or pinned, otherwise the list would lose the person's contact.
+        if (!messages.length && !chat.pinnedMsgId && !chat.displayName) return;
+        out[peerId] = {
+            displayName: chat.displayName || peerId,
+            dp: chat.dp || null,
+            isGroup: !!chat.isGroup,
+            messages,
+            lastMsg: chat.lastMsg || "",
+            lastTime: chat.lastTime || "",
+            pinnedMsgId: chat.pinnedMsgId || null
+        };
+    });
+    return out;
+}
+
+function gmSaveChatsNow() {
+    if (gmChatSaveTimer) { clearTimeout(gmChatSaveTimer); gmChatSaveTimer = null; }
+    const key = gmChatsStorageKey();
+    if (!key) return;
+    const data = gmSerializeChats();
+    let payload = JSON.stringify(data);
+    if (payload.length > GM_CHATS_MAX_CHARS) {
+        // Oldest chat first, oldest message first: one huge thread must not be
+        // able to make the rest of the history unsaveable.
+        const ids = Object.keys(data).sort((a, b) => {
+            const ta = parseInt(data[a].lastTime, 10) || 0;
+            const tb = parseInt(data[b].lastTime, 10) || 0;
+            return ta - tb;
+        });
+        for (const id of ids) {
+            while (payload.length > GM_CHATS_MAX_CHARS && data[id].messages.length) {
+                // Drop a quarter at a time: re-serialising after every single
+                // message would turn a 5 MB history into hundreds of megabytes
+                // of string work on a page hide.
+                const drop = Math.max(1, Math.ceil(data[id].messages.length / 4));
+                data[id].messages.splice(0, drop);
+                payload = JSON.stringify(data);
+            }
+            if (payload.length <= GM_CHATS_MAX_CHARS) break;
+        }
+    }
+    safeStorage.set(key, payload);
+    const groupsKey = gmGroupsStorageKey();
+    if (groupsKey) safeStorage.set(groupsKey, JSON.stringify(groups));
+}
+
+// Mutations are frequent (every message, edit, pin, clear), so writes are
+// debounced; a page hide flushes immediately.
+function gmTouchChats() {
+    if (!userGhostID) return;
+    if (gmChatSaveTimer) clearTimeout(gmChatSaveTimer);
+    gmChatSaveTimer = setTimeout(gmSaveChatsNow, 400);
+}
+
+function gmLoadChats() {
+    const key = gmChatsStorageKey();
+    if (!key) return;
+    const raw = safeStorage.get(key);
+    if (!raw) return;
+    let saved;
+    try { saved = JSON.parse(raw); } catch (e) { safeStorage.del(key); return; }
+    if (!saved || typeof saved !== "object") return;
+    const savedGroupsRaw = safeStorage.get(gmGroupsStorageKey());
+    if (savedGroupsRaw) {
+        try {
+            const savedGroups = JSON.parse(savedGroupsRaw);
+            if (savedGroups && typeof savedGroups === "object") {
+                Object.keys(savedGroups).forEach(id => {
+                    const g = savedGroups[id];
+                    if (g && Array.isArray(g.members)) groups[id] = g;
+                });
+            }
+        } catch (e) { /* corrupt group list: forgotten chats still load */ }
+    }
+    Object.keys(saved).forEach(peerId => {
+        const chat = saved[peerId];
+        if (!chat || !Array.isArray(chat.messages)) return;
+        chatData[peerId] = {
+            messages: chat.messages.filter(gmChatMessageRestorable),
+            unread: 0,
+            lastMsg: chat.lastMsg || "",
+            lastTime: chat.lastTime || "",
+            dp: chat.dp || null,
+            displayName: chat.displayName || peerId,
+            isGroup: !!chat.isGroup,
+            pinnedMsgId: chat.pinnedMsgId || null
+        };
+    });
+    renderChatList();
+}
+
+window.addEventListener("pagehide", gmSaveChatsNow);
+window.addEventListener("beforeunload", gmSaveChatsNow);
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") gmSaveChatsNow();
+});
+
 function addSystemMsg(peerId, text) {
     if (!chatData[peerId]) initChatData(peerId);
     const sm = { id: "sys-"+Date.now(), type: "system", text };
     chatData[peerId].messages.push(sm);
+    gmTouchChats();
     if (currentChatPeer === peerId) {
         const c = document.getElementById("messages-container");
         const d = document.createElement("div");
@@ -3734,6 +3856,7 @@ function sendBundle(contentType, payload) {
     if (chatId) {
         if (!chatData[chatId]) initChatData(chatId);
         chatData[chatId].messages.push(msg);
+        gmTouchChats();
         chatData[chatId].lastMsg = text || (contentType === "location" ? "📍 Location" : "Media");
         chatData[chatId].lastTime = time;
         renderMessage(msg);
@@ -4084,6 +4207,7 @@ function gmForgetMessage(chatId, msgId) {
     const idx = store.messages.findIndex(m => m.id === msgId);
     if (idx < 0) return false;
     store.messages.splice(idx, 1);
+    gmTouchChats();
     return true;
 }
 
@@ -4254,12 +4378,15 @@ function renderEditLocal(msgId, newText) {
     }
 }
 
-// ===== PIN MESSAGE (free: 1 per chat, unlimited = Premium) =====
+// ===== PIN MESSAGE =====
+// One pinned message per chat keeps the bar above the thread readable. Pinning
+// a different message simply replaces it — nothing is locked behind a plan, so
+// the only way to lose a pin is to pin something else or unpin it.
 function togglePinMessage() {
     closeReactionModal();
     const chatId = currentChatPeer;
     const chat = chatData[chatId];
-    if (!chat) return;
+    if (!chat || !selectedMsgIdForContext) return;
 
     if (chat.pinnedMsgId === selectedMsgIdForContext) {
         chat.pinnedMsgId = null;
@@ -4267,13 +4394,11 @@ function togglePinMessage() {
         showToast("Message unpinned");
         return;
     }
-    if (chat.pinnedMsgId) {
-        showToast("Free plan allows 1 pin per chat — unpin it first, or go Premium for unlimited pins");
-        return;
-    }
+    const replaced = !!chat.pinnedMsgId;
     chat.pinnedMsgId = selectedMsgIdForContext;
     renderPinnedBar(chatId);
-    showToast("Message pinned");
+    gmTouchChats();
+    showToast(replaced ? "Pinned message replaced" : "Message pinned");
 }
 
 function renderPinnedBar(chatId) {
@@ -4330,6 +4455,7 @@ function clearCurrentChat() {
     gmConfirm("Clear all messages in this chat? This cannot be undone.", () => {
         chatData[clearPeer].messages = [];
         renderAllMessages(clearPeer);
+        gmSaveChatsNow();
         showToast("Chat cleared");
     }, { title: "Clear chat", confirmLabel: "Clear" });
 }
@@ -4337,6 +4463,7 @@ function clearAllChats() {
     closeAllMenus();
     gmConfirm("Clear every chat on this device? This cannot be undone.", () => {
         Object.keys(chatData).forEach(k => chatData[k].messages = []);
+        gmSaveChatsNow();
         showToast("All chats cleared");
         renderChatList();
     }, { title: "Clear all chats", confirmLabel: "Clear all" });
@@ -4355,6 +4482,7 @@ function gmBlockPeer(peerId) {
     activeConnections = activeConnections.filter(c => c.peer !== peerId);
     delete chatData[peerId];
     delete onlineUsers[peerId];
+    gmSaveChatsNow();
     renderChatList();
     gmSyncBlockedCount();
 }
@@ -6155,98 +6283,6 @@ function openPremiumModal() {
     showToast("Ghost Mesh is free — every feature is already unlocked");
 }
 function closePremiumModal() { hideEl("premium-modal"); }
-
-function unlockPremiumTrial() {
-    if (!userGhostID) { showToast("Create your Ghost ID first"); return; }
-    if (isPremiumUnlocked()) { showToast("Premium already unlocked!"); closePremiumModal(); return; }
-    const COST = 20;
-    if (getCredits() < COST) {
-        showToast(`Need ${COST} credits — you have ${getCredits()}. Claim the daily bonus or share to earn more!`);
-        showNotEnoughCredits(`Premium unlock costs ${COST} credits — you have ${getCredits()}.`);
-        return;
-    }
-    setCredits(getCredits() - COST);
-    setPremiumUnlocked();
-    showToast("Premium unlocked — unlimited pins, themes and more");
-    closePremiumModal();
-}
-
-// ----- Premium plans (INR) -----
-// ₹99 / ₹399 / ₹599, with the per-month figure spelled out so the longer plan
-// saves money honestly (₹33 and ₹50 a month respectively).
-const PREMIUM_PLANS = {
-    monthly: { label: "1 Month", price: "₹99", amountPaise: 9900, months: 1, days: 30 },
-    "6month": { label: "6 Months", price: "₹399", amountPaise: 39900, months: 6, days: 182 },
-    yearly:  { label: "1 Year", price: "₹599", amountPaise: 59900, months: 12, days: 365, founder: true }
-};
-
-// Razorpay checkout is only attempted when a publishable key is configured
-// (<meta name="gm-razorpay-key" content="rzp_test_..."> or window.GM_RAZORPAY_KEY_ID).
-// With no key the app keeps its honest launch behaviour: the plan activates on
-// this device and nothing is charged.
-function gmRazorpayKey() {
-    const meta = document.querySelector('meta[name="gm-razorpay-key"]');
-    return String((window.GM_RAZORPAY_KEY_ID || (meta && meta.content) || "")).trim();
-}
-function gmLoadRazorpay() {
-    if (window.Razorpay) return Promise.resolve(true);
-    if (window.__gmRazorpayLoading) return window.__gmRazorpayLoading;
-    window.__gmRazorpayLoading = new Promise(resolve => {
-        const s = document.createElement("script");
-        s.src = "https://checkout.razorpay.com/v1/checkout.js";
-        s.async = true;
-        s.onload = () => resolve(true);
-        s.onerror = () => resolve(false);
-        document.head.appendChild(s);
-    });
-    return window.__gmRazorpayLoading;
-}
-function gmActivatePremiumPlan(planId, paymentId) {
-    // Free build: there is no plan to activate — everything is already free.
-    showToast("Ghost Mesh is free — nothing to activate");
-}
-function buyPremiumPlan(planId) {
-    // Free build: no checkout, no subscription, no plans for sale.
-    showToast("Ghost Mesh is free — there is nothing to buy");
-    return;
-    /* eslint-disable no-unreachable */
-    if (!userGhostID) { showToast("Create your Ghost ID first"); return; }
-    const plan = PREMIUM_PLANS[planId];
-    if (!plan) return;
-    const key = gmRazorpayKey();
-    if (!key) {
-        gmConfirm(
-            `${plan.label} — ${plan.price}. Payments are not connected in this build yet, so this plan activates free on this device. Add a Razorpay publishable key when you are ready to charge.`,
-            () => { gmActivatePremiumPlan(planId, ""); closePremiumModal(); },
-            { title: "Activate Premium", confirmLabel: "Activate free" }
-        );
-        return;
-    }
-    gmLoadRazorpay().then(ok => {
-        if (!ok || typeof window.Razorpay !== "function") {
-            showToast("Could not open Razorpay checkout — check the connection and try again");
-            return;
-        }
-        const checkout = new window.Razorpay({
-            key: key,
-            amount: plan.amountPaise,
-            currency: "INR",
-            name: "Ghost Mesh",
-            description: plan.label + " Premium — " + plan.price,
-            prefill: { name: userDisplayName || "" },
-            notes: { ghostId: userGhostID, plan: planId },
-            theme: { color: "#9b59f7" },
-            handler: response => {
-                // Client-side activation only. Verify the payment signature on a
-                // server (or a Razorpay webhook) before treating this as paid.
-                gmActivatePremiumPlan(planId, response && response.razorpay_payment_id);
-                closePremiumModal();
-            }
-        });
-        checkout.on("payment.failed", () => showToast("Payment failed — nothing was charged"));
-        checkout.open();
-    });
-}
 
 // ===== GHOST RADAR (Wi-Fi-settings-style) UI =====
 let ghostRadarOn = true;
