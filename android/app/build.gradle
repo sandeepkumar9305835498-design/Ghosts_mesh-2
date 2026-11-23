@@ -137,12 +137,14 @@ gradle.taskGraph.whenReady { taskGraph ->
 
 android {
     namespace "com.ghostmesh.app"
-    compileSdk 35
+    // API 36 (Android 16): Google Play rejects new apps and updates that target
+    // less since 31 Aug 2026. Needs AGP 8.9.1+ and Gradle 8.11.1+.
+    compileSdk 36
 
     defaultConfig {
         applicationId "com.ghostmesh.app"
         minSdk 24          // WebRTC/WebView media capture + WebViewAssetLoader floor
-        targetSdk 35
+        targetSdk 36
         // Bump ghostmesh.versionCode / versionName in android/gradle.properties
         // for every Play upload (versionCode must strictly increase).
         versionCode (project.findProperty("ghostmesh.versionCode") ?: "1").toString().toInteger()

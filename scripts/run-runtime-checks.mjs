@@ -82,6 +82,46 @@ window.executeLogin("", "Test Ghost");
 ok("the app is free: no credit balance exists", window.getCredits() === 0, "credits=" + window.getCredits());
 ok("every feature is unlocked without a plan", window.isPremiumUnlocked() === true);
 
+// ------------------------------------------- chat history survives a reload
+// The thread used to live only in memory, so the Android shell being killed in
+// the background erased every conversation even though the privacy policy says
+// chats are stored on the device. These checks pin the local store down.
+ok("chat history is saved locally", typeof window.gmSaveChatsNow === "function" &&
+    typeof window.gmLoadChats === "function" && typeof window.gmTouchChats === "function");
+const ghostId = $("my-ghost-id-label").innerText;
+const chatsKey = "gm_chats_" + ghostId;
+// localStorage throws for a file:// page (jsdom included), so the store is read
+// through the app's own safeStorage wrapper exactly the way the app does.
+const readStore = key => window.eval(`safeStorage.get(${JSON.stringify(key)})`);
+const writeStore = (key, val) => window.eval(
+    `(function(){ safeStorage.set(${JSON.stringify(key)}, ${JSON.stringify(val)}); })()`);
+const savedPeer = "Ghost-KEPTACROSSRELOAD";
+window.initChatData(savedPeer);
+window.addSystemMsg(savedPeer, "message written before the reload");
+window.gmSaveChatsNow();
+const savedRaw = readStore(chatsKey) || "";
+ok("the store is keyed per Ghost ID", savedRaw.length > 0 && chatsKey.startsWith("gm_chats_"), chatsKey);
+ok("the message text reached local storage", savedRaw.includes("message written before the reload"), savedRaw.slice(0, 160));
+ok("a blob: voice note is not persisted as a broken bubble",
+    window.gmChatMessageRestorable({ mediaPayload: "blob:https://x/1" }) === false &&
+    window.gmChatMessageRestorable({ mediaPayload: "data:image/png;base64,AAA" }) === true);
+ok("saved history never contains a blob: URL", !savedRaw.includes("blob:"));
+// Simulate the next launch: a saved payload for someone who is not in memory.
+const restoredPeer = "Ghost-RESTOREDTHREAD";
+const store = JSON.parse(savedRaw || "{}");
+store[restoredPeer] = {
+    displayName: "Restored Peer",
+    messages: [{ id: "restored-1", sender: restoredPeer, text: "still here after a restart", time: "10:00", direction: "incoming" }],
+    lastMsg: "still here after a restart",
+    lastTime: "10:00",
+    pinnedMsgId: null
+};
+writeStore(chatsKey, JSON.stringify(store));
+window.gmLoadChats();
+ok("a saved chat is back in the list after a reload", !!$("chatitem-" + restoredPeer));
+ok("the restored chat keeps its last message", ($("chatitem-" + restoredPeer)?.textContent || "").includes("still here after a restart"),
+    $("chatitem-" + restoredPeer)?.textContent || "");
+
 // ------------------------------------------------------- in-app confirm
 ok("confirm sheet starts hidden", hidden("gm-confirm") === true);
 let confirmed = false;

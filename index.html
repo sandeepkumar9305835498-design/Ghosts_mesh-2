@@ -15,12 +15,8 @@
     <meta name="description" content="Ghost Mesh — privacy-first, end-to-end encrypted, direct device-to-device messaging. No account, no cloud storage.">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
-    <!-- Razorpay publishable key (placeholder). Replace with your own key before
-         enabling payments. The key is read from window.GM_RAZORPAY_KEY_ID by
-         script.js, so this meta tag is the single source of truth for the web
-         build. Do not commit a live key here. -->
-
-    <meta name="gm-razorpay-key" content="rzp_test_TpjbsTfAoTQsBY">
+    <!-- No payment key and no ad tags: Ghost Mesh has nothing to sell, so there
+         is no checkout to configure and no ad SDK to initialise. -->
     <!-- ==========================================================
          ONLINE MODE — optional PeerJS signalling server
          Leave these commented to use PeerJS's public cloud broker (works
@@ -823,7 +819,7 @@
 
     <!-- BLOCKED GHOSTS — review and undo blocks -->
     <div id="blocked-modal" class="modal-overlay hidden" role="dialog" aria-label="Blocked Ghosts" onclick="if(event.target===this)closeBlockedList()">
-        <div class="modal-box blocked-box">
+        <div class="modal-box">
             <h4>Blocked Ghosts</h4>
             <p class="sub">Blocked people can never open a chat or call with you.</p>
             <div id="blocked-list" class="blocked-list"></div>
@@ -879,9 +875,9 @@
 
     <!-- No credit gifting: Ghost Mesh is free and has no currency. -->
 
-    <!-- PREMIUM MODAL — redesigned: dark-surface card with accent-purple hero,
-         inline-SVG feature icons (no emoji) and tighter vertical rhythm -->
-    <div id="premium-modal" class="modal-overlay hidden" role="dialog" aria-label="Ghost Mesh Premium" onclick="if(event.target===this)closePremiumModal()">
+    <!-- WHAT YOU GET MODAL — every feature, nothing to buy. Kept so the welcome
+         and menu links that explain the app have somewhere real to land. -->
+    <div id="premium-modal" class="modal-overlay hidden" role="dialog" aria-label="Everything included, free" onclick="if(event.target===this)closePremiumModal()">
         <div class="modal-box premium-modal-box">
             <div class="premium-hero">
                 <span class="premium-hero-badge"><svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg></span>
@@ -892,7 +888,7 @@
             <ul class="premium-feature-list">
                 <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg></span><span class="pf-text"><span class="pf-title">Voice Changer</span><span class="pf-sub">calls &amp; voice notes</span></span></li>
                 <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg></span><span class="pf-text"><span class="pf-title">Custom Chat Wallpapers</span><span class="pf-sub">free of the default look</span></span></li>
-                <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg></span><span class="pf-text"><span class="pf-title">Unlimited Pinned Messages</span><span class="pf-sub">for everyone</span></span></li>
+                <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg></span><span class="pf-text"><span class="pf-title">Pinned Messages</span><span class="pf-sub">keep the important one on top</span></span></li>
                 <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9c-.83 0-1.5-.67-1.5-1.5S5.67 9 6.5 9 8 9.67 8 10.5 7.33 12 6.5 12zm3-4C8.67 8 8 7.33 8 6.5S8.67 5 9.5 5s1.5.67 1.5 1.5S10.33 8 9.5 8zm5 0c-.83 0-1.5-.67-1.5-1.5S13.67 5 14.5 5s1.5.67 1.5 1.5S15.33 8 14.5 8zm3 4c-.83 0-1.5-.67-1.5-1.5S16.67 9 17.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg></span><span class="pf-text"><span class="pf-title">Exclusive Bubble Themes</span><span class="pf-sub">plus every accent colour</span></span></li>
                 <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm.5-13H11v6l5.2 3.1.8-1.3-4.5-2.7V7z"/></svg></span><span class="pf-text"><span class="pf-title">Extended Self-Destruct Timers</span><span class="pf-sub">up to 1 hour and beyond</span></span></li>
                 <li><span class="pf-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M18 8h-1V6a5 5 0 0 0-10 0v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zM9 6a3 3 0 0 1 6 0v2H9V6zm3 12a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/></svg></span><span class="pf-text"><span class="pf-title">Hidden Chat Folder</span><span class="pf-sub">PIN-protected, off the list</span></span></li>
@@ -901,22 +897,7 @@
 
             <p class="premium-note">There is nothing to buy. Ghost Mesh has no subscription, no credits and no paid tier — the app is free and unlimited for everyone.</p>
 
-            <div class="premium-earn-section hidden" aria-hidden="true">
-                <p class="premium-earn-title">No credits, no ads — nothing to earn</p>
-                <div class="credits-earn-row">
-                    <button class="credits-earn-btn" id="bonus-earn-btn" onclick="claimDailyBonus()">
-                        <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 2l2.9 6.6 7.1.6-5.4 4.7 1.6 7-6.2-3.7L5.8 21l1.6-7L2 9.2l7.1-.6L12 2z"/></svg>
-                        <span id="bonus-earn-label">Daily Bonus (+2)</span>
-                    </button>
-                    <button class="credits-earn-btn" onclick="shareAppForCredits()">
-                        <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L7.04 9.81C6.5 9.31 5.79 9 5 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/></svg>
-                        Share & Earn (+5)
-                    </button>
-                </div>
-                <p id="credits-eligibility-msg-modal" class="sub hidden" style="text-align:center;margin-top:8px;color:var(--danger);"></p>
-            </div>
-
-            <button class="cancel-btn" style="width:100%;margin-top:8px;" onclick="closePremiumModal()">Maybe Later</button>
+            <button class="cancel-btn" style="width:100%;margin-top:8px;" onclick="closePremiumModal()">Got it</button>
         </div>
     </div>
 
@@ -1347,5 +1328,3 @@ if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)
 </div>
 </body>
 </html>
-
-<!-- razorpay test key placeholder -->
