@@ -101,6 +101,31 @@ public class GhostNativeBridge {
         activity.postToUi(activity::requestNativeMeshStart);
     }
 
+    /**
+     * The same nearby-permission request under the name script.js uses before a
+     * Bluetooth scan, so SCAN / CONNECT / ADVERTISE (and FINE_LOCATION on
+     * Android 11 and below) are granted before the radio starts looking.
+     */
+    @JavascriptInterface
+    public void requestNearbyPermissions() {
+        activity.postToUi(activity::requestNativeMeshStart);
+    }
+
+    /**
+     * {lat,lng} of Android's last known fix (GPS first, then network). Used by
+     * script.js when navigator.geolocation times out inside the WebView.
+     */
+    @JavascriptInterface
+    public String getLastKnownLocation() {
+        return activity.getLastKnownLocationJson();
+    }
+
+    /** Mic permission, asked when a voice note is retried after a denial. */
+    @JavascriptInterface
+    public void requestAudioPermission() {
+        activity.postToUi(activity::requestAudioPermission);
+    }
+
     /** Fixes a permanently denied permission: opens the app's Settings page. */
     @JavascriptInterface
     public void openAppSettings() {

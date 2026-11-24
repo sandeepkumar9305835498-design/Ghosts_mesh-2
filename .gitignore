@@ -1,0 +1,8 @@
+# Local tooling, dependencies and scratch files — never part of the app.
+node_modules/
+tmp/
+bun.lock
+
+# Personal paste/notes folders kept outside the shipped web + Android sources.
+docs/paste/
+docs/ANDROID-ADS-MESH.md

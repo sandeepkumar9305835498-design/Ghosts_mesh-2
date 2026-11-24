@@ -928,26 +928,20 @@ ok("the right PIN unlocks the idle-locked app",
         $("online-strip-list").textContent);
 
     // Tapping Connect on a Bluetooth phone must not fire a Wi-Fi Direct join at
-    // a BLE address; it explains the link and opens the route that works.
+    // a BLE address: BLE only carried discovery, and the Ghost ID it found is
+    // enough to open the normal peer-to-peer chat.
     const nativeCalls = [];
     window.GhostNative = { connect: address => nativeCalls.push(address), startDiscovery() {}, stopDiscovery() {} };
+    let meshConnects = 0;
+    const realConnectToPeer = window.connectToPeer;
+    window.connectToPeer = () => { meshConnects++; };
     window.gmConnectNativePeer("Ghost-BT1");
-    ok("connecting to a Bluetooth phone explains how the chat link opens",
-        hidden("gm-confirm") === false && /Chat over Bluetooth/.test($("gm-confirm-title").innerText),
-        $("gm-confirm-title").innerText);
-    // The QR handshake itself needs a real WebRTC stack (jsdom has none), so the
-    // wiring is checked instead: the confirm must land on the WiFi tab and ask
-    // for the host QR, and must never touch the native Wi-Fi Direct join.
-    let hostQrAsked = 0;
-    const realStartOfflineHost = window.startOfflineHost;
-    window.startOfflineHost = () => { hostQrAsked++; };
-    window.gmConfirmResolve(true);
-    ok("accepting it never hands a BLE address to the Wi-Fi Direct join",
+    ok("connecting to a Bluetooth phone opens the mesh chat link by itself",
+        meshConnects === 1 && hidden("gm-confirm") === true,
+        "connectToPeer=" + meshConnects + " confirmHidden=" + hidden("gm-confirm"));
+    ok("a BLE tap never hands a BLE address to the Wi-Fi Direct join",
         nativeCalls.length === 0, JSON.stringify(nativeCalls));
-    ok("accepting it opens the QR handshake on the WiFi tab",
-        hostQrAsked === 1 && $("main-tabs-scroller").dataset.activeTab === "1",
-        "qrAsked=" + hostQrAsked + " tab=" + $("main-tabs-scroller").dataset.activeTab);
-    window.startOfflineHost = realStartOfflineHost;
+    window.connectToPeer = realConnectToPeer;
     window.closeOfflineConnect();
     window.gmConnectNativePeer("Ghost-WF1");
     ok("connecting to a Wi-Fi Direct phone goes straight to the native join",
@@ -1261,6 +1255,120 @@ ok("the right PIN unlocks the idle-locked app",
     window.eval("gmPresencePeers = {}; discoveredPeers = {}; onlineUsers = {};");
     ok("presence stops without leaking intervals",
         window.eval("gmPresencePollTimer === null && gmPresenceAnnounceTimer === null") === true);
+}
+
+// ------------------------------------- map tiles, big payloads, voice, media
+{
+    // CARTO dark tiles replace OSM (which 403s inside Android WebView).
+    const tileUrl = window.eval("GM_MAP_TILES");
+    ok("the map uses the CARTO dark basemap instead of the blocked OSM server",
+        /basemaps\.cartocdn\.com\/dark_all/.test(tileUrl), tileUrl);
+    ok("the map has an offline radar fallback class", (() => {
+        window.gmMapSetOffline(true);
+        const el = $("live-radar-map");
+        const on = el.classList.contains("map-offline") && /offline radar/i.test($("map-status-line").innerText);
+        window.gmMapSetOffline(false);
+        return on && !el.classList.contains("map-offline");
+    })(), $("map-status-line").innerText);
+
+    // JSON-wrapped text used to render with its quotes.
+    ok("a quoted message is unwrapped once", window.gmUnquoteText('"hello there"') === "hello there",
+        window.gmUnquoteText('"hello there"'));
+    ok("real quotes inside a sentence are kept",
+        window.gmUnquoteText('she said "hi" loudly') === 'she said "hi" loudly');
+
+    // Large voice notes / photos are split so a DataChannel never sees one
+    // oversized frame, and the receiver rebuilds the exact payload.
+    const bigData = "data:audio/webm;base64," + "A".repeat(100 * 1024);
+    const chunkPayload = { type: "chat", msgId: "msg-chunk-test", sender: "Ghost-SELFT", contentType: "audio", mediaPayload: bigData };
+    const parts = window.gmSplitPayload(chunkPayload);
+    ok("a large payload is split into DataChannel-sized chunks",
+        parts.length === Math.ceil(bigData.length / window.eval("GM_CHUNK_SIZE")) && parts.length > 1,
+        parts.length + " parts");
+    ok("every chunk is under the frame limit",
+        parts.every(p => p.chunk.length <= window.eval("GM_CHUNK_SIZE")),
+        Math.max(...parts.map(p => p.chunk.length)));
+    ok("the chunks join back into the original payload",
+        parts.map(p => p.chunk).join("") === bigData);
+
+    // Reassembly on the receiving side, through the real chunk handler.
+    const acks = [];
+    const fakeConn = { open: true, send: p => acks.push(p) };
+    parts.forEach(p => window.gmHandleIncomingChunk(fakeConn, p));
+    const rebuilt = window.eval("chatData['Ghost-SELFT'] && chatData['Ghost-SELFT'].messages.filter(m => m.id === 'msg-chunk-test')[0]");
+    ok("reassembled chunks arrive as one normal voice message",
+        !!rebuilt && rebuilt.contentType === "audio" && rebuilt.mediaPayload === bigData,
+        rebuilt ? String(rebuilt.mediaPayload.length) : "missing");
+    ok("the receiver acknowledges the reassembled message",
+        acks.some(a => a && a.type === "ack" && a.msgId === "msg-chunk-test"), JSON.stringify(acks));
+
+    // Voice bubble: play/pause control, progress bar and duration label.
+    ok("durations render as m:ss", window.gmFormatClock(7) === "0:07" && window.gmFormatClock(65) === "1:05",
+        window.gmFormatClock(65));
+    const bubble = window.gmBuildVoiceBubble("data:audio/webm;base64,AAAA", 7, "audio/webm");
+    ok("a voice note renders a play button, progress bar and duration",
+        !!bubble.querySelector(".voice-play") && !!bubble.querySelector(".voice-bar-fill") &&
+        bubble.querySelector(".voice-time").innerText === "0:07",
+        bubble.querySelector(".voice-time")?.innerText);
+
+    // A photo that cannot decode must not leave "Image couldn't load" in chat.
+    const wrap = doc.createElement("div");
+    const img = doc.createElement("img");
+    const saveBtn = doc.createElement("button");
+    saveBtn.className = "media-save-btn";
+    wrap.appendChild(img);
+    wrap.appendChild(saveBtn);
+    window.gmHandleBrokenMedia(img);
+    ok("a broken image collapses to an icon with no error text",
+        !wrap.querySelector("img") && !wrap.querySelector(".media-save-btn") &&
+        !!wrap.querySelector(".media-broken") && !/couldn/i.test(wrap.textContent),
+        wrap.textContent);
+
+    // Bluetooth rows show a signal meter from the RSSI the shell reports.
+    ok("nearby radios render a three-bar signal meter",
+        (window.gmSignalBars(-50).match(/class="on"/g) || []).length === 3 &&
+        (window.gmSignalBars(-80).match(/class="on"/g) || []).length === 1 &&
+        window.gmSignalBars(0) === "");
+}
+
+// --------------------------------- location: WebView fix + native fallback
+// Android granting ACCESS_FINE_LOCATION while the WebView prompt was answered
+// "false" made the button report "Location permission denied" over a real fix.
+{
+    const coordsEl = $("map-my-coords");
+    let askedOpts = null;
+    Object.defineProperty(window.navigator, "geolocation", {
+        configurable: true,
+        value: {
+            getCurrentPosition(ok, fail, opts) {
+                askedOpts = opts;
+                fail({ code: 1, message: "denied" });
+            }
+        }
+    });
+    window.GhostNative = {
+        getLastKnownLocation: () => JSON.stringify({ lat: 19.076, lng: 72.8777, accuracy: 25 })
+    };
+    window.gmMapLocateMe();
+    ok("the location button asks for a fast, cached fix",
+        !!askedOpts && askedOpts.enableHighAccuracy === false &&
+        askedOpts.timeout === 10000 && askedOpts.maximumAge === 60000,
+        JSON.stringify(askedOpts));
+    ok("a failed WebView fix falls back to Android's last known location",
+        /19\.0760, 72\.8777/.test(coordsEl.innerText), coordsEl.innerText);
+    ok("the fallback is labelled as approximate, not as an error",
+        /last known/i.test($("map-status-line").innerText) && /last known/i.test(toastText()),
+        $("map-status-line").innerText + " | " + toastText());
+    ok("no false 'permission denied' after the permission was granted",
+        !/denied/i.test(toastText()), toastText());
+
+    // Nothing usable anywhere: say so once, still without breaking the map.
+    window.GhostNative = {};
+    window.gmMapLocateMe();
+    ok("without any fix the user is told honestly", /denied/i.test(toastText()), toastText());
+
+    Object.defineProperty(window.navigator, "geolocation", { configurable: true, value: undefined });
+    delete window.GhostNative;
 }
 
 // ---------------------------------------------- nothing logged an error
