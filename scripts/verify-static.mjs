@@ -448,6 +448,36 @@ for (const id of ["lobby-visible-toggle", "lobby-state", "lobby-online-count"]) 
     if (!htmlIds.has(id)) extrasProblems.push("missing #" + id);
 }
 
+// Map tiles, large media chunks, voice bubbles and hidden scrollbars: the four
+// Android-only presentation bugs that came back from the device.
+if (/tile\.openstreetmap\.org/.test(scriptSource)) {
+    extrasProblems.push("the blocked OpenStreetMap tile host is back — CARTO dark tiles are the supported layer");
+}
+if (!/basemaps\.cartocdn\.com\/dark_all/.test(scriptSource)) {
+    extrasProblems.push("the CARTO dark tile layer is missing");
+}
+if (!/map-offline/.test(scriptSource) || !/#live-radar-map\.map-offline/.test(css)) {
+    extrasProblems.push("the offline radar fallback is missing");
+}
+for (const fn of ["gmSplitPayload", "gmSendPayload", "gmHandleIncomingChunk", "gmBuildVoiceBubble"]) {
+    if (!defined.has(fn)) extrasProblems.push(fn + "() is missing — large voice notes / photos would drop");
+}
+if (!/GM_CHUNK_SIZE = 16 \* 1024/.test(scriptSource)) {
+    extrasProblems.push("the DataChannel chunk size changed without a reason");
+}
+if (!/audio\/webm;codecs=opus/.test(scriptSource) || !/audio\/mp4/.test(scriptSource)) {
+    extrasProblems.push("the MediaRecorder mime fallback chain is incomplete");
+}
+if (!/scrollbar-width: none/.test(css) || !/::-webkit-scrollbar \{ width: 0/.test(css)) {
+    extrasProblems.push("scrollbars are visible again");
+}
+if (!/gmHandleBrokenMedia/.test(scriptSource) || /Image couldn\\?t load<\/span>/.test(scriptSource)) {
+    extrasProblems.push("broken images must collapse quietly, not print an error sentence");
+}
+if (!/gmUnquoteText/.test(scriptSource)) {
+    extrasProblems.push("message text is no longer unquoted");
+}
+
 // Native NSD discovery has to be wired on both sides of the bridge.
 if (!/startNsdDiscovery/.test(scriptSource)) extrasProblems.push("the page never starts Android NSD");
 if (!/onPeerDiscovered/.test(scriptSource)) extrasProblems.push("the native NSD callback is missing in script.js");
@@ -694,6 +724,40 @@ if (exists("docs/STORE-LISTING.md") && !/Short description/.test(read("docs/STOR
     storeProblems.push("docs/STORE-LISTING.md lost its store copy");
 }
 check("store listing, target SDK and free-build hygiene hold", storeProblems);
+
+// ------------------------------------------- geolocation permission flow
+// In the WebView the page prompt arrives BEFORE Android has granted location,
+// so the callback has to wait for the system dialog — answering "false" at
+// once produced a "Location permission denied" that was never true. The native
+// last-known fix is the fallback when getCurrentPosition still fails.
+const mainActivitySource = read("android/app/src/main/java/com/ghostmesh/app/MainActivity.java");
+const nativeBridgeSource = read("android/app/src/main/java/com/ghostmesh/app/GhostNativeBridge.java");
+const geoProblems = [];
+if (!/setGeolocationEnabled\(true\)/.test(mainActivitySource)) {
+    geoProblems.push("WebView geolocation is not enabled in MainActivity");
+}
+if (!/onGeolocationPermissionsShowPrompt/.test(mainActivitySource)) {
+    geoProblems.push("MainActivity never answers the WebView geolocation prompt");
+}
+if (!/callback\.invoke\(origin, true, false\)/.test(mainActivitySource)) {
+    geoProblems.push("the geolocation prompt does not grant an already-allowed origin");
+}
+if (!/resolvePendingGeolocationPrompt/.test(mainActivitySource)) {
+    geoProblems.push("the pending geolocation callback is never resolved after the system dialog");
+}
+if (!/GPS_PROVIDER/.test(mainActivitySource) || !/NETWORK_PROVIDER/.test(mainActivitySource)) {
+    geoProblems.push("getLastKnownLocationJson does not read both GPS and network providers");
+}
+if (!/getLastKnownLocation\(\)/.test(nativeBridgeSource)) {
+    geoProblems.push("GhostNative.getLastKnownLocation is not exposed to the page");
+}
+if (!/gmNativeLastKnownLocation/.test(scriptSource) || !/gmApplyUserFix/.test(scriptSource)) {
+    geoProblems.push("script.js has no native last-known fallback for the location button");
+}
+if (!/enableHighAccuracy: false, timeout: 10000, maximumAge: 60000/.test(scriptSource)) {
+    geoProblems.push("the location button no longer uses the fast, cached geolocation options");
+}
+check("geolocation permission flow + native last-known fallback are wired", geoProblems);
 
 // ---------------------------------------------------------------- report
 const failed = results.filter(r => r.problems.length);

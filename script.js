@@ -2157,6 +2157,98 @@ function startOnlinePresenceBroadcast() {
     }, 30000);
 }
 
+// Some builds (and older peers) JSON-wrap the message text, so a plain "hi"
+// arrived as "\"hi\"" and the bubble showed the quotes. One matched outer pair
+// is stripped; quotes a person actually typed inside a sentence stay put.
+function gmUnquoteText(text) {
+    if (typeof text !== "string") return text;
+    let out = text.trim();
+    if (out.length >= 2 && out[0] === '"' && out[out.length - 1] === '"' && out.slice(1, -1).indexOf('"') === -1) {
+        out = out.slice(1, -1).trim();
+    }
+    return out;
+}
+
+function gmHandleIncomingChat(conn, data) {
+    if (blockedPeers.has(data.sender)) return; // FIX 8: ignore blocked
+    const text = gmUnquoteText(data.text);
+    // Incoming text is filtered too — blocking a bad sender on the
+    // other side is pointless if the message already renders here.
+    if ((data.contentType === "text" || !data.contentType) && gmSafetyCheck(text).blocked) {
+        showToast("Blocked an incoming message that broke the safety rules");
+        return;
+    }
+    const chatId = data.groupId || data.sender;
+    if (data.groupId && !groups[data.groupId]) return; // unknown group — ignore
+    if (!chatData[chatId]) initChatData(chatId);
+    const msg = {
+        id: data.msgId, sender: data.sender, text: text,
+        direction: "incoming", dp: data.senderDP, displayName: data.senderName,
+        contentType: data.contentType, mediaPayload: data.mediaPayload,
+        audioDuration: data.audioDuration, audioMime: data.audioMime,
+        viewOnce: data.viewOnce, time: nowTime(),
+        replyTo: data.replyTo, replyText: gmUnquoteText(data.replyText),
+        selfDestruct: data.selfDestruct
+    };
+    chatData[chatId].messages.push(msg);
+    gmTouchChats();
+    const chatPreview = text || (data.contentType === "location" ? "📍 Location" : data.contentType === "audio" ? "🎤 Voice note" : "Media");
+    chatData[chatId].lastMsg = (data.groupId ? (data.senderName || data.sender) + ": " : "") + chatPreview;
+    chatData[chatId].lastTime = msg.time;
+    // A shared pin also lands on the radar map, exactly like the
+    // dedicated location message path does.
+    if (data.contentType === "location" && data.mediaPayload && data.mediaPayload.lat != null) {
+        gmRememberPeerLocation(data.sender, data.mediaPayload.lat, data.mediaPayload.lng, data.senderName);
+    }
+    if (currentChatPeer !== chatId) {
+        chatData[chatId].unread = (chatData[chatId].unread || 0) + 1;
+    } else {
+        renderMessage(msg);
+    }
+    // The timer starts even when the chat is closed — otherwise a
+    // self-destructing message waited in chatData until the person
+    // happened to open that conversation.
+    if (data.selfDestruct > 0) scheduleDestruct(data.msgId, data.selfDestruct, chatId);
+    renderChatList();
+    if (conn && conn.open) conn.send({ type: "ack", msgId: data.msgId });
+    if (navigator.vibrate && notificationsEnabled && !chatMuted[chatId]) navigator.vibrate(50);
+    sendPushNotif(data.senderName || data.sender, chatPreview);
+}
+
+function gmHandleIncomingChunk(conn, data) {
+    if (!data || !data.chunkId || !data.msgId) return;
+    if (blockedPeers.has(data.sender)) return;
+    const total = Number(data.total) || 0;
+    if (total < 1 || total > GM_CHUNK_MAX_TOTAL) return;
+    const now = Date.now();
+    // Drop half-finished transfers from a peer that vanished mid-send, so a
+    // stalled photo cannot sit in memory forever.
+    Object.keys(gmIncomingChunks).forEach(id => {
+        if (now - gmIncomingChunks[id].startedAt > GM_CHUNK_TTL_MS) delete gmIncomingChunks[id];
+    });
+    let buf = gmIncomingChunks[data.chunkId];
+    if (!buf || buf.total !== total) {
+        buf = { total, parts: new Array(total), got: 0, startedAt: now };
+        gmIncomingChunks[data.chunkId] = buf;
+    }
+    const index = Number(data.index);
+    if (!(index >= 0 && index < total)) return;
+    if (typeof data.chunk !== "string") return;
+    if (buf.parts[index] === undefined) {
+        buf.parts[index] = data.chunk;
+        buf.got++;
+    }
+    if (buf.got < total) return;
+    delete gmIncomingChunks[data.chunkId];
+    const full = {};
+    Object.keys(data).forEach(k => {
+        if (k !== "chunk" && k !== "chunkId" && k !== "index" && k !== "total") full[k] = data[k];
+    });
+    full.type = "chat";
+    full.mediaPayload = buf.parts.join("");
+    gmHandleIncomingChat(conn, full);
+}
+
 function setupConn(conn) {
     conn.on('open', () => {
         conn.send({ type: "dp-update", sender: userGhostID, dpData: userCurrentDP, displayName: userDisplayName });
@@ -2189,47 +2281,14 @@ function setupConn(conn) {
                 break;
 
             case "chat": {
-                if (blockedPeers.has(data.sender)) break; // FIX 8: ignore blocked
-                // Incoming text is filtered too — blocking a bad sender on the
-                // other side is pointless if the message already renders here.
-                if ((data.contentType === "text" || !data.contentType) && gmSafetyCheck(data.text).blocked) {
-                    showToast("Blocked an incoming message that broke the safety rules");
-                    break;
-                }
-                const chatId = data.groupId || data.sender;
-                if (data.groupId && !groups[data.groupId]) break; // unknown group — ignore
-                if (!chatData[chatId]) initChatData(chatId);
-                const msg = {
-                    id: data.msgId, sender: data.sender, text: data.text,
-                    direction: "incoming", dp: data.senderDP, displayName: data.senderName,
-                    contentType: data.contentType, mediaPayload: data.mediaPayload,
-                    viewOnce: data.viewOnce, time: nowTime(),
-                    replyTo: data.replyTo, replyText: data.replyText,
-                    selfDestruct: data.selfDestruct
-                };
-                chatData[chatId].messages.push(msg);
-                gmTouchChats();
-                const chatPreview = data.text || (data.contentType === "location" ? "📍 Location" : "Media");
-                chatData[chatId].lastMsg = (data.groupId ? (data.senderName || data.sender) + ": " : "") + chatPreview;
-                chatData[chatId].lastTime = msg.time;
-                // A shared pin also lands on the radar map, exactly like the
-                // dedicated location message path does.
-                if (data.contentType === "location" && data.mediaPayload && data.mediaPayload.lat != null) {
-                    gmRememberPeerLocation(data.sender, data.mediaPayload.lat, data.mediaPayload.lng, data.senderName);
-                }
-                if (currentChatPeer !== chatId) {
-                    chatData[chatId].unread = (chatData[chatId].unread || 0) + 1;
-                } else {
-                    renderMessage(msg);
-                }
-                // The timer starts even when the chat is closed — otherwise a
-                // self-destructing message waited in chatData until the person
-                // happened to open that conversation.
-                if (data.selfDestruct > 0) scheduleDestruct(data.msgId, data.selfDestruct, chatId);
-                renderChatList();
-                if (conn.open) conn.send({ type: "ack", msgId: data.msgId });
-                if (navigator.vibrate && notificationsEnabled && !chatMuted[chatId]) navigator.vibrate(50);
-                sendPushNotif(data.senderName || data.sender, data.text || "sent a message");
+                gmHandleIncomingChat(conn, data);
+                break;
+            }
+
+            // Media that was too big for one DataChannel frame arrives in
+            // ordered parts; nothing is shown until the last one lands.
+            case "chat-chunk": {
+                gmHandleIncomingChunk(conn, data);
                 break;
             }
 
@@ -2597,6 +2656,18 @@ function gmReachablePeers() {
     return Array.from(ids);
 }
 
+// Three-bar signal meter from the RSSI the Android layer reports (-60 strong,
+// -75 ok, weaker still visible). No number: it is a nearby-radio hint, not a
+// measurement the user should try to read.
+function gmSignalBars(rssi) {
+    const value = Number(rssi);
+    if (!isFinite(value) || value === 0) return "";
+    const level = value >= -60 ? 3 : value >= -75 ? 2 : 1;
+    let html = ' <span class="signal-bars" aria-hidden="true">';
+    for (let i = 1; i <= 3; i++) html += '<i class="' + (i <= level ? "on" : "") + '"></i>';
+    return html + "</span>";
+}
+
 // Shared renderer for every reachable-peer list. The WiFi tab's Ghosts You Can
 // Reach" card is the single home for it now, so there is one list to keep
 // correct instead of two copies that could drift apart.
@@ -2626,9 +2697,11 @@ function renderPeopleListInto(containerId, peers, options) {
         // discoveredPeers for this list), so "known" alone used to label a live
         // Ghost as offline with a Reconnect button. Online means online.
         const isFreshDiscovery = (!!known && known.online === true) || !!discoveredPeers[peerId] || !!native;
-        const displayName = known ? known.displayName : (native && native.name ? native.name : peerId);
+        const displayName = gmPresenceCleanName(known ? known.displayName : (native && native.name ? native.name : peerId), peerId);
         let transport = "";
-        if (native) transport = native.transport === "wifi-direct" ? " · Wi-Fi Direct" : " · Bluetooth";
+        if (native) transport = native.transport === "wifi-direct"
+            ? " · Wi-Fi Direct" + gmSignalBars(native.rssi)
+            : " · Bluetooth" + gmSignalBars(native.rssi);
         else if (isFreshDiscovery) transport = " · online now";
         else if (!alreadyConnected) transport = " · offline";
 
@@ -2685,8 +2758,7 @@ function renderPeerLists() {
     renderPeopleListInto("bt-peer-list", btPeers, {
         emptyText: gmNativeMeshAvailable()
             ? "No Bluetooth phones nearby yet. Ask your friend to open Ghost Mesh and keep Bluetooth on."
-            : "Bluetooth discovery needs the Ghost Mesh Android app. On the web, use the WiFi tab's QR pairing instead.",
-        hideActions: true
+            : "Bluetooth discovery needs the Ghost Mesh Android app. On the web, use the WiFi tab's QR pairing instead."
     });
     const btCount = document.getElementById("bt-peer-count");
     if (btCount) btCount.innerText = btPeers.length;
@@ -2725,7 +2797,21 @@ function gmSetBluetoothScan(on) {
         renderPeerLists();
         return;
     }
-    if (on) { gmStartNativeDiscovery(); showToast("Nearby discovery on"); }
+    if (on) {
+        // Android 12+ needs SCAN / CONNECT / ADVERTISE (plus FINE_LOCATION on
+        // 11 and below) before a scan returns anything. The shell asks for all
+        // of them; the radio-off case gets a sentence instead of an empty list.
+        const bridge = window.GhostNative || {};
+        try {
+            if (typeof bridge.isBluetoothEnabled === "function" && !bridge.isBluetoothEnabled()) {
+                showToast("Turn Bluetooth on to find nearby Ghosts");
+            }
+            if (typeof bridge.requestNearbyPermissions === "function") bridge.requestNearbyPermissions();
+        } catch (e) { /* older shell without the radio helpers */ }
+        gmStartNativeDiscovery();
+        showToast("Nearby discovery on");
+        gmSyncBluetoothStatus(gmPeersByTransport("ble").length);
+    }
     else { gmStopNativeDiscovery(); showToast("Nearby discovery off"); }
     renderPeerLists();
 }
@@ -2823,7 +2909,15 @@ function gmConnectNativePeer(peerId) {
     if (peer.transport === "nsd") { connectToPeer(peerId); return; }
     if (peer.transport !== "ble") { connectViaNativeTransport(peerId); return; }
     const name = peer.name || peerId;
-    gmConfirm("Bluetooth found " + name + ". Bluetooth carries the name, not the messages — Android's WebView has no Bluetooth data link. The QR handshake opens the chat as soon as both phones are on the same Wi-Fi / hotspot.",
+    // BLE carries discovery, not messages: the Ghost ID the native advertiser
+    // picked up is enough to open the normal peer-to-peer chat, so Connect no
+    // longer detours through a QR scan when both phones have internet.
+    if (navigator.onLine) {
+        showToast("Connecting to " + name + " over the mesh…");
+        connectToPeer(peerId);
+        return;
+    }
+    gmConfirm("Bluetooth found " + name + ". Bluetooth carries the name, not the messages — Android's WebView has no Bluetooth data link, and there is no internet right now. The QR handshake opens the chat as soon as both phones are on the same Wi-Fi / hotspot.",
         () => { openOfflineConnect(); startOfflineHost(); },
         { title: "Chat over Bluetooth", confirmLabel: "Open QR connect" });
 }
@@ -4021,7 +4115,8 @@ function sendMessage() {
     inp.focus();
 }
 
-function sendBundle(contentType, payload) {
+function sendBundle(contentType, payload, meta) {
+    const extra = meta || {};
     const msgId = "msg-" + Date.now();
     const time = nowTime();
     const text = contentType === "text" ? payload : "";
@@ -4034,6 +4129,7 @@ function sendBundle(contentType, payload) {
         id: msgId, sender: userGhostID, text, direction: "outgoing",
         dp: userCurrentDP, displayName: userDisplayName,
         contentType, mediaPayload: payload,
+        audioDuration: extra.audioDuration, audioMime: extra.audioMime,
         viewOnce: isViewOnceEnabled,
         selfDestruct: selfDestructSeconds,
         time, replyTo: capturedReplyToMsgId, replyText: capturedReplyText
@@ -4060,6 +4156,7 @@ function sendBundle(contentType, payload) {
         type: "chat", msgId, sender: userGhostID, text,
         senderDP: userCurrentDP, senderName: userDisplayName,
         contentType, mediaPayload: payload,
+        audioDuration: extra.audioDuration, audioMime: extra.audioMime,
         viewOnce: isViewOnceEnabled, selfDestruct: selfDestructSeconds,
         replyTo: capturedReplyToMsgId, replyText: capturedReplyText,
         groupId
@@ -4121,6 +4218,12 @@ function shareCurrentLocation() {
     hideEl("attach-menu");
     if (!currentChatPeer) { showToast("Open a chat first"); return; }
     if (!navigator.geolocation || typeof navigator.geolocation.getCurrentPosition !== "function") {
+        const cached = gmNativeLastKnownLocation();
+        if (cached) {
+            sendBundle("location", { lat: cached.lat, lng: cached.lng });
+            showToast("Shared your approximate location");
+            return;
+        }
         showToast("This device has no location service");
         return;
     }
@@ -4136,6 +4239,14 @@ function shareCurrentLocation() {
         sendBundle("location", { lat: coords.latitude, lng: coords.longitude });
         showToast("Location shared");
     }, err => {
+        // Same WebView quirk as the map button: Android may hold the fix while
+        // the page-side call errors. A cached native fix still shares a pin.
+        const cached = gmNativeLastKnownLocation();
+        if (cached && currentChatPeer) {
+            sendBundle("location", { lat: cached.lat, lng: cached.lng });
+            showToast("Shared your approximate location");
+            return;
+        }
         // 1 = permission denied, 2 = position unavailable, 3 = timeout
         const code = err && err.code;
         showToast(code === 1
@@ -4191,12 +4302,12 @@ function renderMessage(msg) {
             e.stopPropagation();
             txtNode.innerText = msg.text;
             txtNode.style.cssText = "";
-            renderMedia(txtNode, msg.contentType, msg.mediaPayload);
+            renderMedia(txtNode, msg.contentType, msg.mediaPayload, msg);
             gmConsumeViewOnce(msg, card);
         };
     } else {
         txtNode.innerText = msg.text;
-        renderMedia(txtNode, msg.contentType, msg.mediaPayload);
+        renderMedia(txtNode, msg.contentType, msg.mediaPayload, msg);
     }
     body.appendChild(txtNode);
 
@@ -4298,7 +4409,144 @@ function downloadCurrentViewerMedia() {
     downloadMedia(currentViewerMedia.dataUrl, currentViewerMedia.fileName);
 }
 
-function renderMedia(node, type, payload) {
+// A photo that cannot decode (truncated transfer, unsupported codec) used to
+// print "Image couldn't load" in the bubble. Now the bubble just drops the
+// broken media: a small muted icon stays where the picture was, no error text.
+function gmHandleBrokenMedia(el) {
+    const wrap = el && el.parentElement;
+    if (!wrap) return;
+    const save = wrap.querySelector(".media-save-btn");
+    if (save) save.remove();
+    if (el !== wrap && el.parentNode === wrap) el.remove();
+    wrap.innerHTML = '<div class="media-broken" aria-label="Media unavailable">' + brokenIconSvg() + '</div>';
+}
+
+// ----- voice note player -----
+// One shared <audio> element drives every bubble: several concurrent media
+// sessions fight over audio focus inside Android WebView, so starting a second
+// note stops the first one.
+let gmVoiceAudio = null;
+let gmVoiceBubble = null;
+const GM_VOICE_PLAY_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M8 5v14l11-7z"/></svg>';
+const GM_VOICE_PAUSE_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>';
+
+function gmFormatClock(seconds) {
+    const total = Math.max(0, Math.round(Number(seconds) || 0));
+    const m = Math.floor(total / 60);
+    const sec = total % 60;
+    return m + ":" + (sec < 10 ? "0" : "") + sec;
+}
+
+function gmVoiceAudioEl() {
+    if (!gmVoiceAudio) {
+        gmVoiceAudio = document.createElement("audio");
+        gmVoiceAudio.preload = "metadata";
+        gmVoiceAudio.style.display = "none";
+        document.body.appendChild(gmVoiceAudio);
+        gmVoiceAudio.addEventListener("timeupdate", gmPaintVoiceProgress);
+        gmVoiceAudio.addEventListener("ended", () => gmResetVoiceBubble(true));
+        gmVoiceAudio.addEventListener("loadedmetadata", () => {
+            if (gmVoiceBubble && isFinite(gmVoiceAudio.duration)) {
+                gmVoiceBubble._seconds = gmVoiceAudio.duration;
+                gmPaintVoiceProgress();
+            }
+        });
+        gmVoiceAudio.addEventListener("error", () => gmResetVoiceBubble(true));
+    }
+    return gmVoiceAudio;
+}
+
+function gmPaintVoiceProgress() {
+    const bubble = gmVoiceBubble;
+    if (!bubble || !gmVoiceAudio) return;
+    const seconds = isFinite(gmVoiceAudio.duration) && gmVoiceAudio.duration > 0
+        ? gmVoiceAudio.duration : (bubble._seconds || 0);
+    const pct = seconds > 0 ? Math.min(100, (gmVoiceAudio.currentTime / seconds) * 100) : 0;
+    const fill = bubble.querySelector(".voice-bar-fill");
+    const label = bubble.querySelector(".voice-time");
+    if (fill) fill.style.width = pct + "%";
+    if (label) {
+        const shown = gmVoiceAudio.currentTime > 0 ? gmVoiceAudio.currentTime : seconds;
+        label.innerText = gmFormatClock(shown);
+    }
+    bubble._seconds = seconds;
+}
+
+function gmResetVoiceBubble(stop) {
+    const bubble = gmVoiceBubble;
+    if (bubble) {
+        const btn = bubble.querySelector(".voice-play");
+        if (btn) { btn.innerHTML = GM_VOICE_PLAY_SVG; btn.setAttribute("aria-label", "Play voice note"); }
+        const fill = bubble.querySelector(".voice-bar-fill");
+        if (fill) fill.style.width = "0%";
+        const label = bubble.querySelector(".voice-time");
+        if (label) label.innerText = gmFormatClock(bubble._seconds || 0);
+    }
+    if (stop && gmVoiceAudio) { try { gmVoiceAudio.pause(); } catch (e) {} }
+    gmVoiceBubble = null;
+}
+
+// Play/pause with a progress bar and a countdown-free duration label, instead of
+// the browser's <audio controls> strip, which looks foreign inside the chat and
+// is inconsistent between WebView versions.
+function gmToggleVoiceBubble(bubble) {
+    if (!bubble || !bubble._src) return;
+    const audio = gmVoiceAudioEl();
+    if (gmVoiceBubble === bubble && !audio.paused) {
+        audio.pause();
+        const btn = bubble.querySelector(".voice-play");
+        if (btn) { btn.innerHTML = GM_VOICE_PLAY_SVG; btn.setAttribute("aria-label", "Play voice note"); }
+        return;
+    }
+    if (gmVoiceBubble && gmVoiceBubble !== bubble) gmResetVoiceBubble(true);
+    gmVoiceBubble = bubble;
+    if (audio.src !== bubble._src) {
+        audio.src = bubble._src;
+        bubble._seconds = bubble._seconds || 0;
+    }
+    const btn = bubble.querySelector(".voice-play");
+    if (btn) { btn.innerHTML = GM_VOICE_PAUSE_SVG; btn.setAttribute("aria-label", "Pause voice note"); }
+    const play = audio.play();
+    if (play && typeof play.catch === "function") {
+        play.catch(() => {
+            gmResetVoiceBubble(true);
+            showToast("Tap once more to play the voice note");
+        });
+    }
+    gmPaintVoiceProgress();
+}
+
+function gmBuildVoiceBubble(src, durationHint, mime) {
+    const bubble = document.createElement("div");
+    bubble.className = "voice-bubble";
+    bubble._src = src;
+    bubble._seconds = Number(durationHint) || 0;
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "voice-play";
+    btn.setAttribute("aria-label", "Play voice note");
+    btn.innerHTML = GM_VOICE_PLAY_SVG;
+    btn.addEventListener("click", e => { e.stopPropagation(); gmToggleVoiceBubble(bubble); });
+
+    const bar = document.createElement("div");
+    bar.className = "voice-bar";
+    const fill = document.createElement("div");
+    fill.className = "voice-bar-fill";
+    bar.appendChild(fill);
+
+    const label = document.createElement("span");
+    label.className = "voice-time";
+    label.innerText = gmFormatClock(bubble._seconds);
+    label.title = mime || "";
+
+    bubble.appendChild(btn);
+    bubble.appendChild(bar);
+    bubble.appendChild(label);
+    return bubble;
+}
+
+function renderMedia(node, type, payload, meta) {
     if (!type || !payload) return;
 
     if (type === "location" && payload.lat != null && payload.lng != null) {
@@ -4326,13 +4574,8 @@ function renderMedia(node, type, payload) {
         wrap.style.marginTop = "6px";
 
         if (!isValidDataUrl(payload.fileData)) {
-            // Corrupt/broken media — never show a silent blank box.
-            wrap.innerHTML = `
-                <div class="media-broken">
-                    ${brokenIconSvg()}
-                    <span class="media-broken-text">This file couldn't be loaded (may be corrupted)</span>
-                    <button class="media-save-btn" onclick="event.stopPropagation();downloadMedia('${payload.fileData || ''}','${payload.fileName || 'file'}')">Try Download Anyway</button>
-                </div>`;
+            // Corrupt/broken media: a tiny icon, no error sentence in the bubble.
+            wrap.innerHTML = `<div class="media-broken">${brokenIconSvg()}</div>`;
             node.appendChild(wrap);
             return;
         }
@@ -4340,13 +4583,13 @@ function renderMedia(node, type, payload) {
         const safeFileName = (payload.fileName || "file").replace(/'/g, "");
         if (payload.fileType?.startsWith("image/")) {
             wrap.innerHTML = `
-                <img src="${payload.fileData}" class="shared-img" onclick="event.stopPropagation();openMediaViewer(this.src,'${payload.fileType}','${safeFileName}')" onerror="this.parentElement.innerHTML='<div class=&quot;media-broken&quot;>${brokenIconSvg()}<span class=&quot;media-broken-text&quot;>Image couldn\\'t load</span></div>'">
+                <img src="${payload.fileData}" class="shared-img" onclick="event.stopPropagation();openMediaViewer(this.src,'${payload.fileType}','${safeFileName}')" onerror="gmHandleBrokenMedia(this)">
                 <button class="media-save-btn" onclick="event.stopPropagation();downloadMedia('${payload.fileData}','${safeFileName}')">
                     <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg> Save
                 </button>`;
         } else if (payload.fileType?.startsWith("video/")) {
             wrap.innerHTML = `
-                <video src="${payload.fileData}" controls class="shared-video" onclick="event.stopPropagation()"></video>
+                <video src="${payload.fileData}" controls class="shared-video" onclick="event.stopPropagation()" onerror="gmHandleBrokenMedia(this)"></video>
                 <button class="media-save-btn" onclick="event.stopPropagation();downloadMedia('${payload.fileData}','${safeFileName}')">
                     <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg> Save
                 </button>`;
@@ -4371,7 +4614,7 @@ function renderMedia(node, type, payload) {
         if (!isValidDataUrl(payload)) {
             wrap.innerHTML = `<div class="media-broken">${brokenIconSvg()}<span class="media-broken-text">Voice note couldn't load</span></div>`;
         } else {
-            wrap.innerHTML = `<audio src="${payload}" controls onclick="event.stopPropagation()"></audio>`;
+            wrap.appendChild(gmBuildVoiceBubble(payload, meta && meta.audioDuration, (meta && meta.audioMime) || "audio/webm"));
         }
         node.appendChild(wrap);
     }
@@ -4815,39 +5058,75 @@ function toggleViewOnceMode() {
 }
 
 // ===== VOICE RECORD =====
+// Android WebView's MediaRecorder supports a different set on each OEM build,
+// so the first supported type wins and a bare `new MediaRecorder(stream)` is the
+// last resort rather than a crash.
 function getSupportedAudioMime() {
     const types = ['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg;codecs=opus'];
     for (const t of types) if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported?.(t)) return t;
     return '';
 }
 
+let gmRecordStartedAt = 0;
+
+function gmResetRecordButton(btn) {
+    if (!btn) return;
+    btn.style.color = "";
+    btn.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg>`;
+}
+
+function gmStartVoiceRecording(btn) {
+    gmGetUserMedia({ audio: true }).then(stream => {
+        recordedAudioChunks = [];
+        const mime = getSupportedAudioMime();
+        try { mediaRecorderInstance = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream); }
+        catch(e) { mediaRecorderInstance = new MediaRecorder(stream); }
+        const usedType = mediaRecorderInstance.mimeType || 'audio/webm';
+        gmRecordStartedAt = Date.now();
+        mediaRecorderInstance.ondataavailable = e => { if(e.data?.size > 0) recordedAudioChunks.push(e.data); };
+        mediaRecorderInstance.onstop = () => {
+            const blob = new Blob(recordedAudioChunks, { type: usedType });
+            const seconds = Math.max(1, Math.round((Date.now() - gmRecordStartedAt) / 1000));
+            const reader = new FileReader();
+            reader.onload = e => {
+                // Duration travels with the note so the bubble can show 0:07
+                // before the audio metadata is decoded, and so a receiver that
+                // cannot decode the codec still renders a usable row.
+                sendBundle("audio", e.target.result, { audioDuration: seconds, audioMime: usedType });
+            };
+            reader.readAsDataURL(blob);
+            stream.getTracks().forEach(t => t.stop());
+        };
+        mediaRecorderInstance.start();
+        isRecordingAudio = true;
+        btn.style.color = "var(--danger)";
+        btn.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>`;
+        showToast("Recording — tap again to send");
+    }).catch(e => {
+        isRecordingAudio = false;
+        gmResetRecordButton(btn);
+        if (isInsecureMediaError(e)) return;
+        // Inside the APK the WebView can ask Android for RECORD_AUDIO itself;
+        // the next tap succeeds once the system dialog is allowed.
+        const bridge = window.GhostNative;
+        const askMic = bridge && (bridge.requestAudioPermission || bridge.requestPermissions);
+        if (askMic) {
+            try { askMic.call(bridge); } catch (err) {}
+            showToast("Allow microphone access, then tap the mic again");
+        } else {
+            showToast("Microphone permission denied — allow it in browser settings");
+        }
+    });
+}
+
 function toggleVoiceRecord() {
     const btn = document.getElementById("voice-record-btn");
     if (!isRecordingAudio) {
-        gmGetUserMedia({ audio: true }).then(stream => {
-            recordedAudioChunks = [];
-            const mime = getSupportedAudioMime();
-            try { mediaRecorderInstance = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream); }
-            catch(e) { mediaRecorderInstance = new MediaRecorder(stream); }
-            const usedType = mediaRecorderInstance.mimeType || 'audio/webm';
-            mediaRecorderInstance.ondataavailable = e => { if(e.data?.size > 0) recordedAudioChunks.push(e.data); };
-            mediaRecorderInstance.onstop = () => {
-                const blob = new Blob(recordedAudioChunks, { type: usedType });
-                const reader = new FileReader();
-                reader.onload = e => sendBundle("audio", e.target.result);
-                reader.readAsDataURL(blob);
-                stream.getTracks().forEach(t => t.stop());
-            };
-            mediaRecorderInstance.start();
-            isRecordingAudio = true;
-            btn.style.color = "var(--danger)";
-            btn.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>`;
-        }).catch(e => { if (isInsecureMediaError(e)) return; showToast("Mic permission denied"); });
-    } else {
+        gmStartVoiceRecording(btn);
+    } else if (mediaRecorderInstance && mediaRecorderInstance.state !== "inactive") {
         mediaRecorderInstance.stop();
         isRecordingAudio = false;
-        btn.style.color = "";
-        btn.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg>`;
+        gmResetRecordButton(btn);
     }
 }
 
@@ -4989,11 +5268,51 @@ function toggleCallVideoUI(hasVideo) {
     document.getElementById("call-dp-fallback").classList.toggle("hidden", hasVideo);
 }
 
+// ----- large payload chunking -----
+// A base64 voice note or photo is one string, and some Android WebView
+// DataChannels drop a single frame that big (the "message never arrives" bug).
+// Anything over 16 KB is split into ordered chunks and rebuilt by the receiver
+// before it reaches the normal "chat" handler.
+const GM_CHUNK_SIZE = 16 * 1024;
+const GM_CHUNK_TTL_MS = 90000;
+const GM_CHUNK_MAX_TOTAL = 512;
+let gmIncomingChunks = {};
+
+function gmPayloadNeedsChunks(payload) {
+    return !!(payload && payload.type === "chat" && typeof payload.mediaPayload === "string"
+        && payload.mediaPayload.length > GM_CHUNK_SIZE);
+}
+
+function gmSplitPayload(payload) {
+    const data = payload.mediaPayload;
+    const total = Math.ceil(data.length / GM_CHUNK_SIZE);
+    const chunkId = payload.msgId + "-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const parts = [];
+    for (let i = 0; i < total; i++) {
+        const frame = {};
+        Object.keys(payload).forEach(k => { if (k !== "mediaPayload") frame[k] = payload[k]; });
+        frame.type = "chat-chunk";
+        frame.chunkId = chunkId;
+        frame.index = i;
+        frame.total = total;
+        frame.chunk = data.slice(i * GM_CHUNK_SIZE, (i + 1) * GM_CHUNK_SIZE);
+        parts.push(frame);
+    }
+    return parts;
+}
+
+// sendFn is whichever transport won inside sendToPeer(); chunking stays out of
+// transport selection so a retry on another link starts from chunk 0 again.
+function gmSendPayload(sendFn, payload) {
+    if (!gmPayloadNeedsChunks(payload)) { sendFn(payload); return; }
+    gmSplitPayload(payload).forEach(sendFn);
+}
+
 function sendToPeer(peerId, payload) {
     if (!peerId) return false;
     const conn = activeConnections.find(c => c.peer === peerId);
     if (conn && conn.open !== false) {
-        try { conn.send(payload); return true; } catch (e) {
+        try { gmSendPayload(p => conn.send(p), payload); return true; } catch (e) {
             console.warn("sendToPeer failed on the tracked connection:", peerId, e);
         }
     }
@@ -5005,7 +5324,7 @@ function sendToPeer(peerId, payload) {
     const offlineLink = offlineWrappedChannels[peerId]
         || Object.values(offlineWrappedChannels || {}).find(w => w && w.peer === peerId && w.open);
     if (offlineLink && offlineLink.open) {
-        try { offlineLink.send(payload); return true; } catch (e) {
+        try { gmSendPayload(p => offlineLink.send(p), payload); return true; } catch (e) {
             console.warn("sendToPeer offline link failed, falling back:", peerId, e);
         }
     }
@@ -5019,7 +5338,7 @@ function sendToPeer(peerId, payload) {
     for (const c of [].concat(live)) {
         if (!c || typeof c.send !== "function" || c.open === false) continue;
         try {
-            c.send(payload);
+            gmSendPayload(p => c.send(p), payload);
             if (!activeConnections.some(x => x.peer === peerId)) activeConnections.push(c);
             return true;
         } catch (e) {
@@ -5029,7 +5348,7 @@ function sendToPeer(peerId, payload) {
     // Last resort for offline (QR/Wi-Fi) links.
     const wrapped = Object.values(offlineWrappedChannels || {}).find(w => w && w.peer === peerId && w.open);
     if (wrapped) {
-        try { wrapped.send(payload); return true; } catch (e) { console.warn("sendToPeer offline fallback failed:", e); }
+        try { gmSendPayload(p => wrapped.send(p), payload); return true; } catch (e) { console.warn("sendToPeer offline fallback failed:", e); }
     }
     return false;
 }
@@ -5650,24 +5969,78 @@ function gmRememberPeerLocation(peerId, lat, lng, name) {
     gmSyncMapPins();
 }
 
+// OpenStreetMap's public tile server answers Android WebViews with
+// "403 Access Blocked: App is not following the tile usage policy", which left
+// the Live Map blank. CARTO's dark basemap allows app use, has no API key and
+// already matches the app's theme, so it replaces OSM as the primary layer.
+const GM_MAP_TILES = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
+const GM_MAP_TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
+const GM_MAP_MAX_TILE_ERRORS = 3;
+let gmMapTileLayer = null, gmMapTileErrors = 0, gmMapOffline = false;
+
+// No tiles? The screen is still a radar: a dark grid is painted by CSS
+// (.map-offline in style.css) and the peer pins stay exactly where they are.
+function gmMapSetOffline(on, reason) {
+    gmMapOffline = !!on;
+    const el = document.getElementById("live-radar-map");
+    if (el) el.classList.toggle("map-offline", gmMapOffline);
+    if (gmMapOffline) {
+        gmMapStatus(reason || "Offline radar — nearby Ghosts are still plotted. Map tiles return when you reconnect.");
+    }
+}
+
+function gmMapAttachTiles() {
+    if (!radarMapInstance || typeof L === "undefined") return;
+    if (gmMapTileLayer) {
+        try { radarMapInstance.removeLayer(gmMapTileLayer); } catch (e) {}
+        gmMapTileLayer = null;
+    }
+    if (!navigator.onLine) { gmMapSetOffline(true); return; }
+    gmMapTileErrors = 0;
+    gmMapTileLayer = L.tileLayer(GM_MAP_TILES, {
+        maxZoom: 19,
+        subdomains: "abcd",
+        detectRetina: true,
+        crossOrigin: true,
+        attribution: GM_MAP_TILE_ATTRIBUTION
+    });
+    // A blocked or unreachable tile host fires tileerror instead of throwing,
+    // so the fallback has to listen here — not in a try/catch around addTo().
+    gmMapTileLayer.on("tileerror", () => {
+        gmMapTileErrors++;
+        if (gmMapTileErrors < GM_MAP_MAX_TILE_ERRORS || gmMapOffline) return;
+        gmMapSetOffline(true, "Map tiles are blocked on this network — offline radar is on.");
+        if (gmMapTileLayer) { try { radarMapInstance.removeLayer(gmMapTileLayer); } catch (e) {} gmMapTileLayer = null; }
+    });
+    gmMapTileLayer.addTo(radarMapInstance);
+}
+
 function initRadarMap() {
     if (typeof L === "undefined") return; // leaflet.js unavailable — everything else still works
     try {
         radarMapInstance = L.map('live-radar-map', { zoomControl: false, attributionControl: true })
             .setView([20.5937, 78.9629], 4);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            maxZoom: 19,
-            attribution: '&copy; OpenStreetMap'
-        }).addTo(radarMapInstance);
+        gmMapAttachTiles();
         gmMapStatus("Location is off — tap “Use my location” to put yourself on the map.");
     } catch (e) { console.error(e); }
 }
+
+// Back online: retry the dark tiles once; if they fail again the grid simply
+// stays, so the map never ends up half-painted.
+window.addEventListener("online", () => {
+    if (!radarMapInstance) return;
+    if (gmMapOffline) gmMapSetOffline(false);
+    gmMapAttachTiles();
+});
 
 async function openLiveMap() {
     closeAllMenus();
     const screen = document.getElementById("map-screen");
     if (!screen) return;
     showScreen("map-screen");
+    // Offline apps have no business waiting on a tile CDN: go straight to the
+    // radar grid so the screen opens instantly with the pins already drawn.
+    if (!navigator.onLine) gmMapSetOffline(true);
     const ok = await gmEnsureLib("leaflet");
     if (!ok || typeof L === "undefined") {
         gmMapStatus("The map tiles need one online visit — everything else still works offline.");
@@ -5705,29 +6078,74 @@ function toggleRadarMap() {
     openLiveMap();
 }
 
-function gmMapLocateMe() {
-    if (!navigator.geolocation) {
-        gmMapStatus("This device has no location service — nothing can be plotted.");
-        showToast("Location is not available on this device");
-        return;
+// One place that turns a fix (from the browser OR Android's LocationManager)
+// into a pin, so both paths draw exactly the same map.
+function gmApplyUserFix(lat, lng, statusText, toastText) {
+    const la = Number(lat), ln = Number(lng);
+    if (!isFinite(la) || !isFinite(ln) || (la === 0 && ln === 0)) return false;
+    userLat = la;
+    userLng = ln;
+    hasRealLocation = true;
+    gmMapHasFix = true;
+    if (radarMapInstance) {
+        radarMapInstance.setView([userLat, userLng], 15);
+        gmSyncMapPins();
     }
+    const coords = document.getElementById("map-my-coords");
+    if (coords) coords.innerText = userLat.toFixed(4) + ", " + userLng.toFixed(4);
+    gmMapStatus(statusText || "Your live position — kept on this device, never uploaded.");
+    if (toastText) showToast(toastText);
+    return true;
+}
+
+// Android's cached fix, straight from LocationManager (GPS first, then network).
+// Returns null when the shell is absent, permission is missing, or no fix exists.
+function gmNativeLastKnownLocation() {
+    const bridge = window.GhostNative;
+    if (!bridge || typeof bridge.getLastKnownLocation !== "function") return null;
+    try {
+        const raw = bridge.getLastKnownLocation();
+        const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+        if (!parsed || parsed.lat == null || parsed.lng == null) return null;
+        const lat = Number(parsed.lat), lng = Number(parsed.lng);
+        if (!isFinite(lat) || !isFinite(lng) || (lat === 0 && lng === 0)) return null;
+        return { lat, lng, accuracy: Number(parsed.accuracy) || 0 };
+    } catch (e) {
+        return null;
+    }
+}
+
+function gmMapLocateMe() {
     gmMapStatus("Getting your location…");
-    navigator.geolocation.getCurrentPosition(pos => {
-        userLat = pos.coords.latitude;
-        userLng = pos.coords.longitude;
-        hasRealLocation = true;
-        gmMapHasFix = true;
-        if (radarMapInstance) {
-            radarMapInstance.setView([userLat, userLng], 15);
-            gmSyncMapPins();
-        }
-        const coords = document.getElementById("map-my-coords");
-        if (coords) coords.innerText = userLat.toFixed(4) + ", " + userLng.toFixed(4);
-        gmMapStatus("Your live position — kept on this device, never uploaded.");
-    }, () => {
+    let answered = false;
+
+    // The WebView prompt can be denied natively while the JS callback never
+    // fires; a native last-known fix is still a usable answer, so it is tried
+    // before any "permission denied" message is shown.
+    const useNativeFallback = reason => {
+        if (answered) return;
+        answered = true;
+        const fix = gmNativeLastKnownLocation();
+        if (fix && gmApplyUserFix(fix.lat, fix.lng,
+            "Approximate position from Android's last known fix — kept on this device.",
+            "Using your last known location")) return;
         gmMapStatus("Location permission was not given. The map still works — nothing is read.");
-        showToast("Location permission denied");
-    }, { enableHighAccuracy: true, maximumAge: 20000, timeout: 15000 });
+        showToast(reason === "denied" ? "Location permission denied" : "Couldn't get a location fix");
+    };
+
+    if (!navigator.geolocation) { useNativeFallback("unsupported"); return; }
+
+    navigator.geolocation.getCurrentPosition(pos => {
+        if (answered) return;
+        answered = true;
+        gmApplyUserFix(pos.coords.latitude, pos.coords.longitude,
+            "Your live position — kept on this device, never uploaded.");
+    }, err => {
+        useNativeFallback(err && err.code === 1 ? "denied" : "timeout");
+    }, { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 });
+
+    // Safety net for WebViews that swallow the error callback entirely.
+    setTimeout(() => useNativeFallback("timeout"), 12000);
 }
 
 function gmMapRecenter() {

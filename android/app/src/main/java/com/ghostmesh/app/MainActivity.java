@@ -7,6 +7,8 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.location.Location;
+import android.location.LocationManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -588,6 +590,19 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
             registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(),
                     result -> resolvePendingWebPermissionRequest());
 
+    /**
+     * Geolocation is its own flow: the WebView prompt arrives before Android has
+     * granted anything, so the callback is held until the system dialog closes.
+     * Answering it immediately with "false" is what made getCurrentPosition()
+     * fail with "Location permission denied" right after the user allowed it.
+     */
+    private GeolocationPermissions.Callback pendingGeoCallback;
+    private String pendingGeoOrigin;
+
+    private final ActivityResultLauncher<String[]> geoPermissionLauncher =
+            registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(),
+                    result -> resolvePendingGeolocationPrompt());
+
     private final ActivityResultLauncher<Intent> fileChooserLauncher =
             registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
                 if (pendingFileChooserCallback == null) return;
@@ -784,14 +799,19 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
 
             @Override
             public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback callback) {
-                boolean granted = hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
-                        || hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION);
-                callback.invoke(origin, granted, false);
-                if (!granted) {
-                    permissionLauncher.launch(new String[]{
-                            Manifest.permission.ACCESS_FINE_LOCATION,
-                            Manifest.permission.ACCESS_COARSE_LOCATION});
+                // Already allowed? Grant the page immediately so the pending
+                // getCurrentPosition() call succeeds instead of timing out.
+                if (hasLocationPermission()) {
+                    callback.invoke(origin, true, false);
+                    return;
                 }
+                // Otherwise keep the callback alive until the system dialog is
+                // answered, then grant or deny based on the real result.
+                pendingGeoCallback = callback;
+                pendingGeoOrigin = origin;
+                geoPermissionLauncher.launch(new String[]{
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION});
             }
 
             @Override
@@ -1329,6 +1349,15 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
     // ------------------------------------------------------------------
     // Permissions
     // ------------------------------------------------------------------
+    /**
+     * Voice-note retry path: the WebView's getUserMedia was denied, so ask for
+     * RECORD_AUDIO natively and let the next mic tap succeed.
+     */
+    public void requestAudioPermission() {
+        if (hasPermission(Manifest.permission.RECORD_AUDIO)) return;
+        permissionLauncher.launch(new String[]{Manifest.permission.RECORD_AUDIO});
+    }
+
     private void handleWebPermissionRequest(PermissionRequest request) {
         List<String> missing = new ArrayList<>();
         for (String resource : request.getResources()) {
@@ -1376,6 +1405,62 @@ public class MainActivity extends AppCompatActivity implements GhostMeshService.
 
     private boolean hasPermission(String permission) {
         return ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean hasLocationPermission() {
+        return hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+                || hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION);
+    }
+
+    /** The system location dialog just closed — answer the waiting WebView prompt. */
+    private void resolvePendingGeolocationPrompt() {
+        GeolocationPermissions.Callback callback = pendingGeoCallback;
+        String origin = pendingGeoOrigin;
+        pendingGeoCallback = null;
+        pendingGeoOrigin = null;
+        if (callback == null) return;
+        try {
+            callback.invoke(origin, hasLocationPermission(), false);
+        } catch (Throwable ignored) {
+            // The page navigated away while the dialog was up.
+        }
+    }
+
+    /**
+     * Last known fix from GPS or the network provider, as {lat,lng} JSON.
+     * script.js falls back to this when navigator.geolocation times out inside
+     * the WebView; an empty object means "no fix, and no permission".
+     */
+    public String getLastKnownLocationJson() {
+        try {
+            if (!hasLocationPermission()) return "{}";
+            LocationManager manager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+            if (manager == null) return "{}";
+            Location best = null;
+            for (String provider : new String[]{LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER}) {
+                Location candidate = null;
+                try {
+                    if (manager.isProviderEnabled(provider)) {
+                        candidate = manager.getLastKnownLocation(provider);
+                    }
+                } catch (SecurityException | IllegalArgumentException ignored) {
+                    // Permission revoked between the check and the call, or the
+                    // provider vanished — try the next one.
+                }
+                if (candidate == null) continue;
+                if (best == null || candidate.getTime() > best.getTime()) best = candidate;
+            }
+            if (best == null) return "{}";
+            return new org.json.JSONObject()
+                    .put("lat", best.getLatitude())
+                    .put("lng", best.getLongitude())
+                    .put("accuracy", best.hasAccuracy() ? (double) best.getAccuracy() : 0d)
+                    .put("time", best.getTime())
+                    .toString();
+        } catch (Throwable t) {
+            Log.w("GhostMesh", "last known location failed", t);
+            return "{}";
+        }
     }
 
     // ------------------------------------------------------------------
