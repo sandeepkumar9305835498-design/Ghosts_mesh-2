@@ -5969,14 +5969,9 @@ function gmRememberPeerLocation(peerId, lat, lng, name) {
     gmSyncMapPins();
 }
 
-// OpenStreetMap's public tile server answers Android WebViews with
-// "403 Access Blocked: App is not following the tile usage policy", which left
-// the Live Map blank. CARTO's dark basemap allows app use, has no API key and
-// already matches the app's theme, so it replaces OSM as the primary layer.
-const GM_MAP_TILES = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
-const GM_MAP_TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
-const GM_MAP_MAX_TILE_ERRORS = 3;
-let gmMapTileLayer = null, gmMapTileErrors = 0, gmMapOffline = false;
+const GM_MAP_TILES = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+const GM_MAP_TILE_ATTRIBUTION = "\u00a9 OpenStreetMap contributors";
+let gmMapTileLayer = null, gmMapOffline = false;
 
 // No tiles? The screen is still a radar: a dark grid is painted by CSS
 // (.map-offline in style.css) and the peer pins stay exactly where they are.
@@ -5985,7 +5980,7 @@ function gmMapSetOffline(on, reason) {
     const el = document.getElementById("live-radar-map");
     if (el) el.classList.toggle("map-offline", gmMapOffline);
     if (gmMapOffline) {
-        gmMapStatus(reason || "Offline radar — nearby Ghosts are still plotted. Map tiles return when you reconnect.");
+        gmMapStatus(reason || "Map tiles are blocked on this network — the radar still shows nearby Ghosts.");
     }
 }
 
@@ -5996,23 +5991,10 @@ function gmMapAttachTiles() {
         gmMapTileLayer = null;
     }
     if (!navigator.onLine) { gmMapSetOffline(true); return; }
-    gmMapTileErrors = 0;
     gmMapTileLayer = L.tileLayer(GM_MAP_TILES, {
         maxZoom: 19,
-        subdomains: "abcd",
-        detectRetina: true,
-        crossOrigin: true,
         attribution: GM_MAP_TILE_ATTRIBUTION
-    });
-    // A blocked or unreachable tile host fires tileerror instead of throwing,
-    // so the fallback has to listen here — not in a try/catch around addTo().
-    gmMapTileLayer.on("tileerror", () => {
-        gmMapTileErrors++;
-        if (gmMapTileErrors < GM_MAP_MAX_TILE_ERRORS || gmMapOffline) return;
-        gmMapSetOffline(true, "Map tiles are blocked on this network — offline radar is on.");
-        if (gmMapTileLayer) { try { radarMapInstance.removeLayer(gmMapTileLayer); } catch (e) {} gmMapTileLayer = null; }
-    });
-    gmMapTileLayer.addTo(radarMapInstance);
+    }).addTo(radarMapInstance);
 }
 
 function initRadarMap() {
@@ -6022,6 +6004,27 @@ function initRadarMap() {
             .setView([20.5937, 78.9629], 4);
         gmMapAttachTiles();
         gmMapStatus("Location is off — tap “Use my location” to put yourself on the map.");
+    gmMapStatus("Live Map is ready — tiles are from OpenStreetMap.");
+
+    gmMapStatus("Live Map is ready — tiles are from OpenStreetMap.");
+
+    gmMapStatus("Live Map is ready — tiles are from OpenStreetMap.");
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     } catch (e) { console.error(e); }
 }
 

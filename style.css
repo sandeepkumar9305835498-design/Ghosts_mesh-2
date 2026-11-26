@@ -494,6 +494,10 @@ body {
 }
 #live-radar-map.map-offline .leaflet-tile-pane,
 #live-radar-map.map-offline .leaflet-control-attribution { display: none; }
+
+.live-map-wrap .leaflet-tile-pane {
+    filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+}
 #live-radar-map.map-offline .leaflet-container { background: transparent; }
 /* Leaflet paints a white/grey background of its own; the app is dark. */
 .live-map-wrap .leaflet-container { background: var(--bg2); font-family: inherit; }
