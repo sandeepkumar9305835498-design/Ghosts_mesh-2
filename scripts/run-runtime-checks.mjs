@@ -1259,14 +1259,15 @@ ok("the right PIN unlocks the idle-locked app",
 
 // ------------------------------------- map tiles, big payloads, voice, media
 {
-    // CARTO dark tiles replace OSM (which 403s inside Android WebView).
+    // OSM tiles are used directly (the runtime dark look comes from the CSS filter
+    // on .leaflet-tile-pane, not from a dark tile host).
     const tileUrl = window.eval("GM_MAP_TILES");
-    ok("the map uses the CARTO dark basemap instead of the blocked OSM server",
-        /basemaps\.cartocdn\.com\/dark_all/.test(tileUrl), tileUrl);
+    ok("the map uses the OSM tile server",
+        /^https:\/\/tile\.openstreetmap\.org\/\{z\}\/\{x\}\/\{y\}\.png$/.test(tileUrl), tileUrl);
     ok("the map has an offline radar fallback class", (() => {
         window.gmMapSetOffline(true);
         const el = $("live-radar-map");
-        const on = el.classList.contains("map-offline") && /offline radar/i.test($("map-status-line").innerText);
+        const on = el.classList.contains("map-offline") && /Map tiles are blocked on this network/i.test($("map-status-line").innerText);
         window.gmMapSetOffline(false);
         return on && !el.classList.contains("map-offline");
     })(), $("map-status-line").innerText);
