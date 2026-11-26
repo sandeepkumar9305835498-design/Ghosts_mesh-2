@@ -450,11 +450,8 @@ for (const id of ["lobby-visible-toggle", "lobby-state", "lobby-online-count"]) 
 
 // Map tiles, large media chunks, voice bubbles and hidden scrollbars: the four
 // Android-only presentation bugs that came back from the device.
-if (/tile\.openstreetmap\.org/.test(scriptSource)) {
-    extrasProblems.push("the blocked OpenStreetMap tile host is back — CARTO dark tiles are the supported layer");
-}
-if (!/basemaps\.cartocdn\.com\/dark_all/.test(scriptSource)) {
-    extrasProblems.push("the CARTO dark tile layer is missing");
+if (!/tile\.openstreetmap\.org\/{z}\/{x}\/{y}\.png/.test(scriptSource)) {
+    extrasProblems.push("the OSM tile layer is missing — the map cannot load");
 }
 if (!/map-offline/.test(scriptSource) || !/#live-radar-map\.map-offline/.test(css)) {
     extrasProblems.push("the offline radar fallback is missing");

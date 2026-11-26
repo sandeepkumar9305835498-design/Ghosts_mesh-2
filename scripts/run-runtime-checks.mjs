@@ -1267,7 +1267,7 @@ ok("the right PIN unlocks the idle-locked app",
     ok("the map has an offline radar fallback class", (() => {
         window.gmMapSetOffline(true);
         const el = $("live-radar-map");
-        const on = el.classList.contains("map-offline") && /offline radar/i.test($("map-status-line").innerText);
+        const on = el.classList.contains("map-offline") && /Map tiles are blocked on this network/i.test($("map-status-line").innerText);
         window.gmMapSetOffline(false);
         return on && !el.classList.contains("map-offline");
     })(), $("map-status-line").innerText);
