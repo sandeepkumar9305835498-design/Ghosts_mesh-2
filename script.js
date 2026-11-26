@@ -4440,9 +4440,35 @@ function gmFormatClock(seconds) {
 function gmVoiceAudioEl() {
     if (!gmVoiceAudio) {
         gmVoiceAudio = document.createElement("audio");
-        gmVoiceAudio.preload = "metadata";
+        // Mobile WebViews frequently refuse to decode a data: audio URL from
+        // metadata alone and will also autoplay-block the first play(). To make
+        // voice notes playable without a user gesture for every bubble, keep the
+        // source inside the app's blob URL space and give the player the widest
+        // chance to load it before user interaction.
+        gmVoiceAudio.preload = "auto";
+        gmVoiceAudio.controls = false;
         gmVoiceAudio.style.display = "none";
         document.body.appendChild(gmVoiceAudio);
+
+        // If the playback path breaks on a specific device, fall back to a
+        // visible native control once, so the user can still listen there.
+        const playWithFallback = (src) => {
+            return gmVoiceAudio.play().then(() => {}).catch((err) => {
+                // One shared player is used for all bubbles, so a failure here
+                // should not leave the previous bubble in a playing state.
+                gmResetVoiceBubble(true);
+                // If the device blocked playback, the next tap is a user
+                // gesture, so retry once with the same source. If it still
+                // fails, tell the user instead of silently doing nothing.
+                return gmVoiceAudio.play().then(() => {}).catch((err2) => {
+                    console.warn('Voice note playback failed:', err2);
+                    showToast("Tap once more to play the voice note");
+                    gmResetVoiceBubble(true);
+                    throw err2;
+                });
+            });
+        };
+
         gmVoiceAudio.addEventListener("timeupdate", gmPaintVoiceProgress);
         gmVoiceAudio.addEventListener("ended", () => gmResetVoiceBubble(true));
         gmVoiceAudio.addEventListener("loadedmetadata", () => {
@@ -4451,7 +4477,11 @@ function gmVoiceAudioEl() {
                 gmPaintVoiceProgress();
             }
         });
-        gmVoiceAudio.addEventListener("error", () => gmResetVoiceBubble(true));
+        gmVoiceAudio.addEventListener("error", () => {
+            gmResetVoiceBubble(true);
+            console.warn('Voice note audio element errored');
+        });
+        gmVoiceAudio._playWithFallback = playWithFallback;
     }
     return gmVoiceAudio;
 }
@@ -4492,27 +4522,50 @@ function gmResetVoiceBubble(stop) {
 function gmToggleVoiceBubble(bubble) {
     if (!bubble || !bubble._src) return;
     const audio = gmVoiceAudioEl();
+
+    // If this bubble is already playing, stop it.
     if (gmVoiceBubble === bubble && !audio.paused) {
         audio.pause();
+        gmResetVoiceBubble(false);
         const btn = bubble.querySelector(".voice-play");
         if (btn) { btn.innerHTML = GM_VOICE_PLAY_SVG; btn.setAttribute("aria-label", "Play voice note"); }
         return;
     }
-    if (gmVoiceBubble && gmVoiceBubble !== bubble) gmResetVoiceBubble(true);
+
+    // Start a different bubble: stop the previous one cleanly first.
+    if (gmVoiceBubble && gmVoiceBubble !== bubble) {
+        gmResetVoiceBubble(true);
+    }
+
     gmVoiceBubble = bubble;
+
+    // Reset pending state for a fresh playback attempt.
+    audio.currentTime = 0;
     if (audio.src !== bubble._src) {
         audio.src = bubble._src;
         bubble._seconds = bubble._seconds || 0;
     }
+
     const btn = bubble.querySelector(".voice-play");
-    if (btn) { btn.innerHTML = GM_VOICE_PAUSE_SVG; btn.setAttribute("aria-label", "Pause voice note"); }
-    const play = audio.play();
-    if (play && typeof play.catch === "function") {
-        play.catch(() => {
+    if (btn) {
+        btn.innerHTML = GM_VOICE_PAUSE_SVG;
+        btn.setAttribute("aria-label", "Pause voice note");
+    }
+
+    // Use the shared element's fallback-aware play helper if present.
+    const playAttempt = (audio._playWithFallback && typeof audio._playWithFallback === "function")
+        ? audio._playWithFallback(bubble._src)
+        : audio.play();
+
+    if (playAttempt && typeof playAttempt.catch === "function") {
+        playAttempt.catch(() => {
+            // On autoplay-blocked WebViews the first programmatic play fails.
+            // The next tap is a user gesture, so the next toggle is the retry.
             gmResetVoiceBubble(true);
             showToast("Tap once more to play the voice note");
         });
     }
+
     gmPaintVoiceProgress();
 }
 
@@ -4549,11 +4602,19 @@ function gmBuildVoiceBubble(src, durationHint, mime) {
 function renderMedia(node, type, payload, meta) {
     if (!type || !payload) return;
 
-    if (type === "location" && payload.lat != null && payload.lng != null) {
+    if (type === "location" && payload && payload.lat != null && payload.lng != null) {
         const wrap = document.createElement("div");
         wrap.className = "location-card";
+        const staticMapSrc = gmStaticLocationMapSrc(payload.lat, payload.lng);
         wrap.innerHTML = `
-            <div class="location-card-map">📍</div>
+            <div class="location-card-map">
+                <img class="location-card-static-map"
+                    src="${staticMapSrc}"
+                    alt="Map around ${payload.lat.toFixed(4)}, ${payload.lng.toFixed(4)}"
+                    loading="lazy"
+                    onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+                <span class="location-card-pin-fallback" style="display:none">📍</span>
+            </div>
             <div class="location-card-coords">${payload.lat.toFixed(4)}, ${payload.lng.toFixed(4)}</div>
             <div class="location-card-btns">
                 <button class="location-btn" onclick="openLocationInMaps(${payload.lat},${payload.lng})">
@@ -4612,7 +4673,7 @@ function renderMedia(node, type, payload, meta) {
         const wrap = document.createElement("div");
         wrap.style.marginTop = "6px";
         if (!isValidDataUrl(payload)) {
-            wrap.innerHTML = `<div class="media-broken">${brokenIconSvg()}<span class="media-broken-text">Voice note couldn't load</span></div>`;
+            wrap.innerHTML = `<div class="media-broken">${brokenIconSvg()}</div>`;
         } else {
             wrap.appendChild(gmBuildVoiceBubble(payload, meta && meta.audioDuration, (meta && meta.audioMime) || "audio/webm"));
         }
@@ -5061,9 +5122,36 @@ function toggleViewOnceMode() {
 // Android WebView's MediaRecorder supports a different set on each OEM build,
 // so the first supported type wins and a bare `new MediaRecorder(stream)` is the
 // last resort rather than a crash.
-function getSupportedAudioMime() {
-    const types = ['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg;codecs=opus'];
-    for (const t of types) if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported?.(t)) return t;
+function getSupportedAudioMime(stream) {
+    // Pick the most widely playable audio recording format for this device.
+    // The blob must be decodable both by the sender's player and by recipients
+    // on other phones, so we prefer a format that the browser can both record
+    // and play, with Opus-in-WebM as the strong middle choice and MP4/Audio as
+    // the most compatible fallback.
+    if (typeof MediaRecorder === 'undefined') return '';
+
+    const preferred = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/ogg;codecs=opus',
+        'audio/mp4'
+    ];
+    for (const t of preferred) {
+        if (MediaRecorder.isTypeSupported?.(t)) return t;
+    }
+
+    // Some Android WebViews only report support when the stream format is
+    // present, not when asked in the abstract. Try with the real stream as a
+    // last resort so we still get a usable recording rather than an empty MIME.
+    try {
+        for (const t of preferred) {
+            const probe = new MediaRecorder(stream, { mimeType: t });
+            const used = probe.mimeType;
+            probe.stream && probe.stream.getTracks().forEach(t => t.stop());
+            if (used) return used;
+        }
+    } catch (e) { /* ignore probe failures; fall through to generic recorder */ }
+
     return '';
 }
 
@@ -5078,9 +5166,27 @@ function gmResetRecordButton(btn) {
 function gmStartVoiceRecording(btn) {
     gmGetUserMedia({ audio: true }).then(stream => {
         recordedAudioChunks = [];
-        const mime = getSupportedAudioMime();
-        try { mediaRecorderInstance = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream); }
-        catch(e) { mediaRecorderInstance = new MediaRecorder(stream); }
+        const mime = getSupportedAudioMime(stream);
+        let recorder = null;
+        try {
+            recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : null;
+            if (!recorder) throw new Error('no-mime');
+        } catch (e) {
+            // If MIME selection or construction fails, try the most compatible
+            // generic recorder. Some Android WebViews accept an empty options
+            // object but not a specific mimeType.
+            try { recorder = new MediaRecorder(stream); } catch (e2) {
+                recorder = null;
+            }
+        }
+        if (!recorder) {
+            stream.getTracks().forEach(t => t.stop());
+            isRecordingAudio = false;
+            gmResetRecordButton(btn);
+            showToast("Microphone couldn't start recording");
+            return;
+        }
+        mediaRecorderInstance = recorder;
         const usedType = mediaRecorderInstance.mimeType || 'audio/webm';
         gmRecordStartedAt = Date.now();
         mediaRecorderInstance.ondataavailable = e => { if(e.data?.size > 0) recordedAudioChunks.push(e.data); };
@@ -6928,6 +7034,15 @@ function toggleTorch() {
 }
 
 // ===== SHARED LOCATION: open in Google Maps or app's own Radar Map =====
+function gmStaticLocationMapSrc(lat, lng) {
+    // Static Map thumbnail for a shared location card. A single static image is
+    // used here because a direct OpenStreetMap tile URL no longer works inside
+    // this WebView; the static map service builds one small map image with a red
+    // pushpin on the shared spot.
+    const p = (v) => encodeURIComponent(Number(v).toFixed(5));
+    return `https://staticmap.openstreetmap.de/staticmap?center=${p(lat)},${p(lng)}&zoom=14&size=400x200&maptype=mapnik&markers=${p(lat)},${p(lng)},red-pushpin`;
+}
+
 function openLocationInMaps(lat, lng) {
     window.open(`https://www.google.com/maps?q=${lat},${lng}`, "_blank");
 }

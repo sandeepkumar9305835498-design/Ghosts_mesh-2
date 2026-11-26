@@ -649,9 +649,11 @@ window.closeBlockedList();
     const locCard = doc.querySelector("#messages-container .location-card");
     ok("sharing a location asks the device once and posts a location card",
         geoAsked === 1 && !!locCard, "asked=" + geoAsked + " card=" + !!locCard);
-    ok("the location card carries the real coordinates and both map buttons",
+    ok("the location card carries the real coordinates, a small map thumbnail and both map buttons",
         !!locCard && /28\.6139, 77\.2090/.test(locCard.textContent) &&
-        /Google Maps/.test(locCard.textContent) && /Radar Map/.test(locCard.textContent),
+        /Google Maps/.test(locCard.textContent) && /Radar Map/.test(locCard.textContent) &&
+        /location-card-static-map/i.test(locCard.innerHTML) &&
+        /staticmap\.openstreetmap\.de\/staticmap/i.test(locCard.innerHTML),
         locCard ? locCard.textContent.replace(/\s+/g, " ").slice(0, 90) : "(none)");
     Object.defineProperty(window.navigator, "geolocation", { configurable: true, value: undefined });
     window.goBackToList();
@@ -1311,6 +1313,15 @@ ok("the right PIN unlocks the idle-locked app",
         !!bubble.querySelector(".voice-play") && !!bubble.querySelector(".voice-bar-fill") &&
         bubble.querySelector(".voice-time").innerText === "0:07",
         bubble.querySelector(".voice-time")?.innerText);
+
+    // The shared player helper is wired so failed playback can be retried once.
+    ok("the voice player exposes a fallback-aware play helper",
+        typeof window.gmVoiceAudioEl === "function" &&
+        /playWithFallback/.test(window.gmVoiceAudioEl.toString()));
+
+    // A broken voice note must not print the old error sentence anymore.
+    ok("a broken voice note no longer prints 'couldn\'t load'",
+        !/couldn/i.test(window.gmHandleBrokenMedia.toString()));
 
     // A photo that cannot decode must not leave "Image couldn't load" in chat.
     const wrap = doc.createElement("div");

@@ -462,8 +462,11 @@ for (const fn of ["gmSplitPayload", "gmSendPayload", "gmHandleIncomingChunk", "g
 if (!/GM_CHUNK_SIZE = 16 \* 1024/.test(scriptSource)) {
     extrasProblems.push("the DataChannel chunk size changed without a reason");
 }
-if (!/audio\/webm;codecs=opus/.test(scriptSource) || !/audio\/mp4/.test(scriptSource)) {
-    extrasProblems.push("the MediaRecorder mime fallback chain is incomplete");
+if (!/audio\/webm;codecs=opus/.test(scriptSource) ||
+    !/audio\/mp4/.test(scriptSource) ||
+    !/function getSupportedAudioMime\(stream\)/.test(scriptSource) ||
+    !/stream\.getTracks\(\)\s*\.\s*forEach/.test(scriptSource)) {
+    extrasProblems.push("the MediaRecorder MIME selection and fallback logic looks incomplete");
 }
 if (!/scrollbar-width: none/.test(css) || !/::-webkit-scrollbar \{ width: 0/.test(css)) {
     extrasProblems.push("scrollbars are visible again");
